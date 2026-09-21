@@ -144,4 +144,22 @@ export interface ScraperSettings {
   default_source: 'auto' | 'screenscraper' | 'steam' | 'dlsite' | 'wikipedia' | 'rawg';
 }
 
+export interface RomUploadProgressPayload {
+  file_name: string;
+  file_index: number;
+  total_files: number;
+  current_bytes: number;
+  total_bytes: number;
+  overall_current_bytes: number;
+  overall_total_bytes: number;
+  bytes_per_sec: number;
+  is_finished: boolean;
+}
+
+export interface RomUploadResult {
+  success_count: number;
+  failed_files: string[];
+  message: string;
+}
+
 

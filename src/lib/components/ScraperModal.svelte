@@ -66,6 +66,23 @@
   // Preview tab: image or video
   let previewTab = $state<'image' | 'video'>('image');
 
+  function decodeHtml(text?: string | null): string {
+    if (!text) return '';
+    if (!text.includes('&')) return text;
+    try {
+      const doc = new DOMParser().parseFromString(text, 'text/html');
+      return doc.documentElement.textContent || text;
+    } catch {
+      return text
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+    }
+  }
+
   function formatFileSize(bytes?: number | null): string {
     if (!bytes || bytes <= 0) return '';
     if (bytes >= 1024 * 1024) {
@@ -198,9 +215,16 @@
         scraperSettings,
         selectedSource
       );
-      searchResults = results;
-      if (results.length > 0) {
-        selectCandidate(results[0]);
+      searchResults = results.map((r) => ({
+        ...r,
+        name: decodeHtml(r.name),
+        desc: decodeHtml(r.desc),
+        developer: r.developer ? decodeHtml(r.developer) : null,
+        publisher: r.publisher ? decodeHtml(r.publisher) : null,
+        genre: r.genre ? decodeHtml(r.genre) : null,
+      }));
+      if (searchResults.length > 0) {
+        selectCandidate(searchResults[0]);
       }
     } catch (err: any) {
       console.error('검색 실패:', err);
@@ -225,20 +249,20 @@
     try {
       // 1. Overwrite selected text fields
       if (applyTitle && selectedCandidate.name) {
-        game.name = selectedCandidate.name;
+        game.name = decodeHtml(selectedCandidate.name);
       }
       if (applyDesc && selectedCandidate.desc) {
-        game.desc = selectedCandidate.desc;
+        game.desc = decodeHtml(selectedCandidate.desc);
       }
       if (applyGenre && selectedCandidate.genre) {
-        game.genre = selectedCandidate.genre;
+        game.genre = decodeHtml(selectedCandidate.genre);
       }
       if (applyDate && selectedCandidate.releasedate) {
         game.releasedate = selectedCandidate.releasedate;
       }
       if (applyDev) {
-        if (selectedCandidate.developer) game.developer = selectedCandidate.developer;
-        if (selectedCandidate.publisher) game.publisher = selectedCandidate.publisher;
+        if (selectedCandidate.developer) game.developer = decodeHtml(selectedCandidate.developer);
+        if (selectedCandidate.publisher) game.publisher = decodeHtml(selectedCandidate.publisher);
       }
       if (applyRating && selectedCandidate.rating !== null && selectedCandidate.rating !== undefined) {
         game.rating = selectedCandidate.rating;

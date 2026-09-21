@@ -101,3 +101,23 @@ pub struct ScreenScraperAccountStatus {
     pub max_requests_per_day: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RomUploadProgress {
+    pub file_name: String,
+    pub file_index: usize,
+    pub total_files: usize,
+    pub current_bytes: u64,
+    pub total_bytes: u64,
+    pub overall_current_bytes: u64,
+    pub overall_total_bytes: u64,
+    pub bytes_per_sec: f64,
+    pub is_finished: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RomUploadResult {
+    pub success_count: usize,
+    pub failed_files: Vec<String>,
+    pub message: String,
+}
+

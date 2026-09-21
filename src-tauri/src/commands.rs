@@ -1,14 +1,16 @@
 use std::collections::HashSet;
+use std::time::Instant;
 use base64::Engine;
+use tauri::Emitter;
 use crate::models::{
-    ConnectionTestResult, GameItem, ScrapedGame, ScreenScraperAccountStatus,
-    ScreenScraperCredentials, StorageLocation, SystemPlatform,
+    ConnectionTestResult, GameItem, RomUploadProgress, RomUploadResult, ScrapedGame,
+    ScreenScraperAccountStatus, ScreenScraperCredentials, StorageLocation, SystemPlatform,
 };
 use crate::rom_scanner::{load_system_games, save_system_games, scan_systems};
 use crate::scraper::{
-    clean_query, download_image, download_video, enrich_media_sizes, search_dlsite,
-    search_dlsite_eng, search_dlsite_kor, search_rawg, search_screenscraper, search_steam,
-    search_wikipedia, test_screenscraper_account,
+    clean_query, download_image, download_video, enrich_media_sizes, sanitize_scraped_game,
+    search_dlsite, search_dlsite_eng, search_dlsite_kor, search_rawg, search_screenscraper,
+    search_steam, search_wikipedia, test_screenscraper_account,
 };
 use crate::ssh_client::RemoteSession;
 
@@ -551,6 +553,8 @@ pub async fn search_game_metadata_cmd(
     // Concurrent HEAD requests to resolve image and video file sizes
     enrich_media_sizes(&mut all_results).await;
 
+    let all_results: Vec<ScrapedGame> = all_results.into_iter().map(sanitize_scraped_game).collect();
+
     Ok(all_results)
 }
 
@@ -659,5 +663,200 @@ pub async fn download_and_upload_scraped_video_cmd(
 
     // Return relative path for gamelist.xml
     Ok(format!("./videos/{}", target_filename))
+}
+
+struct RomToUpload {
+    local_path: std::path::PathBuf,
+    rel_name: String,
+    size: u64,
+}
+
+fn collect_upload_files(
+    path: &std::path::Path,
+    prefix: &str,
+    out: &mut Vec<RomToUpload>,
+) {
+    if path.is_file() {
+        if let Ok(meta) = path.metadata() {
+            let fname = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let rel = if prefix.is_empty() {
+                fname
+            } else {
+                format!("{}/{}", prefix, fname)
+            };
+            out.push(RomToUpload {
+                local_path: path.to_path_buf(),
+                rel_name: rel,
+                size: meta.len(),
+            });
+        }
+    } else if path.is_dir() {
+        let dir_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let new_prefix = if prefix.is_empty() {
+            dir_name
+        } else {
+            format!("{}/{}", prefix, dir_name)
+        };
+
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                collect_upload_files(&entry.path(), &new_prefix, out);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn upload_rom_files(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    roms_path: String,
+    system_id: String,
+    local_paths: Vec<String>,
+) -> Result<RomUploadResult, String> {
+    if local_paths.is_empty() {
+        return Ok(RomUploadResult {
+            success_count: 0,
+            failed_files: vec![],
+            message: "업로드할 파일이 지정되지 않았습니다.".to_string(),
+        });
+    }
+
+    // 1. Gather all files to upload (including directories)
+    let mut files_to_upload = Vec::new();
+    for p in &local_paths {
+        let path = std::path::Path::new(p);
+        collect_upload_files(path, "", &mut files_to_upload);
+    }
+
+    if files_to_upload.is_empty() {
+        return Ok(RomUploadResult {
+            success_count: 0,
+            failed_files: vec![],
+            message: "전송 가능한 파일이 없습니다.".to_string(),
+        });
+    }
+
+    let total_files_count = files_to_upload.len();
+    let overall_total_bytes: u64 = files_to_upload.iter().map(|f| f.size).sum();
+
+    // 2. Connect to remote session
+    let session = RemoteSession::connect(&host, port, &username, &password).await?;
+
+    let base_remote_dir = format!("{}/{}", roms_path.trim_end_matches('/'), system_id.trim_matches('/'));
+    session.create_dir_all(&base_remote_dir).await?;
+
+    let mut overall_current_bytes: u64 = 0;
+    let mut success_count = 0;
+    let mut failed_files = Vec::new();
+
+    let start_time = Instant::now();
+
+    for (idx, file) in files_to_upload.iter().enumerate() {
+        let remote_dest = format!("{}/{}", base_remote_dir, file.rel_name.replace('\\', "/"));
+        let mut file_written: u64 = 0;
+        let mut last_emit = Instant::now();
+
+        // Initial progress emit for this file
+        let _ = app.emit(
+            "rom_upload_progress",
+            RomUploadProgress {
+                file_name: file.rel_name.clone(),
+                file_index: idx + 1,
+                total_files: total_files_count,
+                current_bytes: 0,
+                total_bytes: file.size,
+                overall_current_bytes,
+                overall_total_bytes,
+                bytes_per_sec: 0.0,
+                is_finished: false,
+            },
+        );
+
+        let res = session
+            .write_file_from_local(&file.local_path, &remote_dest, |written| {
+                file_written = written;
+                let cur_overall = overall_current_bytes + written;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let bps = if elapsed > 0.05 {
+                    cur_overall as f64 / elapsed
+                } else {
+                    0.0
+                };
+
+                if last_emit.elapsed() >= std::time::Duration::from_millis(100) || written == file.size {
+                    last_emit = Instant::now();
+                    let _ = app.emit(
+                        "rom_upload_progress",
+                        RomUploadProgress {
+                            file_name: file.rel_name.clone(),
+                            file_index: idx + 1,
+                            total_files: total_files_count,
+                            current_bytes: written,
+                            total_bytes: file.size,
+                            overall_current_bytes: cur_overall,
+                            overall_total_bytes,
+                            bytes_per_sec: bps,
+                            is_finished: false,
+                        },
+                    );
+                }
+            })
+            .await;
+
+        match res {
+            Ok(bytes) => {
+                overall_current_bytes += bytes;
+                success_count += 1;
+            }
+            Err(e) => {
+                failed_files.push(format!("{}: {}", file.rel_name, e));
+            }
+        }
+    }
+
+    // Final finish event
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let final_bps = if elapsed > 0.0 {
+        overall_current_bytes as f64 / elapsed
+    } else {
+        0.0
+    };
+
+    let _ = app.emit(
+        "rom_upload_progress",
+        RomUploadProgress {
+            file_name: "완료".to_string(),
+            file_index: total_files_count,
+            total_files: total_files_count,
+            current_bytes: 0,
+            total_bytes: 0,
+            overall_current_bytes,
+            overall_total_bytes,
+            bytes_per_sec: final_bps,
+            is_finished: true,
+        },
+    );
+
+    let message = if failed_files.is_empty() {
+        format!("{}개 파일 전송 완료", success_count)
+    } else {
+        format!("{}개 전송 성공, {}개 실패", success_count, failed_files.len())
+    };
+
+    Ok(RomUploadResult {
+        success_count,
+        failed_files,
+        message,
+    })
 }
 

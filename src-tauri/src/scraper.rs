@@ -672,6 +672,112 @@ pub async fn search_steam(query: &str) -> Result<Vec<ScrapedGame>, String> {
     Ok(results)
 }
 
+/// Decodes all HTML entities (named, decimal &#...;, and hex &#x...;) into plain unicode text
+pub fn decode_html_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_string();
+    }
+
+    let mut s = input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#039;", "'")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&#X27;", "'")
+        .replace("&#x22;", "\"")
+        .replace("&#X22;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&trade;", "™")
+        .replace("&#8482;", "™")
+        .replace("&reg;", "®")
+        .replace("&#174;", "®")
+        .replace("&copy;", "©")
+        .replace("&#169;", "©")
+        .replace("&hellip;", "…")
+        .replace("&#8230;", "…")
+        .replace("&ndash;", "–")
+        .replace("&#8211;", "–")
+        .replace("&mdash;", "—")
+        .replace("&#8212;", "—")
+        .replace("&lsquo;", "‘")
+        .replace("&#8216;", "‘")
+        .replace("&rsquo;", "’")
+        .replace("&#8217;", "’")
+        .replace("&ldquo;", "“")
+        .replace("&#8220;", "“")
+        .replace("&rdquo;", "”")
+        .replace("&#8221;", "”");
+
+    // Generic decimal and hex entities: &#...; and &#x...;
+    if s.contains("&#") {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '&' && chars.peek() == Some(&'#') {
+                chars.next(); // consume '#'
+                let mut is_hex = false;
+                if chars.peek() == Some(&'x') || chars.peek() == Some(&'X') {
+                    is_hex = true;
+                    chars.next(); // consume 'x' / 'X'
+                }
+
+                let mut code_str = String::new();
+                while let Some(&next_c) = chars.peek() {
+                    if (is_hex && next_c.is_ascii_hexdigit()) || (!is_hex && next_c.is_ascii_digit()) {
+                        code_str.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+
+                if chars.peek() == Some(&';') {
+                    chars.next(); // consume ';'
+                }
+
+                let decoded_char = if is_hex {
+                    u32::from_str_radix(&code_str, 16).ok().and_then(char::from_u32)
+                } else {
+                    code_str.parse::<u32>().ok().and_then(char::from_u32)
+                };
+
+                if let Some(ch) = decoded_char {
+                    result.push(ch);
+                } else {
+                    result.push('&');
+                    result.push('#');
+                    if is_hex {
+                        result.push('x');
+                    }
+                    result.push_str(&code_str);
+                    result.push(';');
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        s = result;
+    }
+
+    // Decode &amp; at the end so it doesn't accidentally reveal new entities,
+    // and handle double-escaped entities (e.g. &amp;#039;)
+    s = s.replace("&amp;", "&");
+    if s.contains("&quot;") || s.contains("&#039;") || s.contains("&#39;") || s.contains("&apos;") {
+        s = s
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&#039;", "'")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">");
+    }
+
+    s
+}
+
 /// Cleans raw HTML snippet into clean plain text for game descriptions
 pub fn clean_html_description(raw: &str) -> String {
     let s = raw
@@ -695,14 +801,7 @@ pub fn clean_html_description(raw: &str) -> String {
         }
     }
 
-    let unescaped = clean
-        .replace("&quot;", "\"")
-        .replace("&#039;", "'")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ");
+    let unescaped = decode_html_entities(&clean);
 
     let mut lines = Vec::new();
     let mut empty_count = 0;
@@ -726,6 +825,16 @@ pub fn clean_html_description(raw: &str) -> String {
     } else {
         result
     }
+}
+
+/// Sanitizes all text fields of a ScrapedGame (decoding any HTML entities)
+pub fn sanitize_scraped_game(mut game: ScrapedGame) -> ScrapedGame {
+    game.name = decode_html_entities(&game.name);
+    game.desc = decode_html_entities(&game.desc);
+    game.developer = game.developer.map(|s| decode_html_entities(&s));
+    game.publisher = game.publisher.map(|s| decode_html_entities(&s));
+    game.genre = game.genre.map(|s| decode_html_entities(&s));
+    game
 }
 
 /// Extracts game description from DLsite product page HTML
@@ -1928,6 +2037,22 @@ pub async fn enrich_media_sizes(games: &mut [ScrapedGame]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_decode_html_entities() {
+        assert_eq!(
+            decode_html_entities("Rune&#039;sPharmacy ~ティアラ島のお薬屋さん~"),
+            "Rune'sPharmacy ~ティアラ島のお薬屋さん~"
+        );
+        assert_eq!(
+            decode_html_entities("Rock &amp; Roll &quot;Classic&quot; &#x27;80s &hellip;"),
+            "Rock & Roll \"Classic\" '80s …"
+        );
+        assert_eq!(
+            decode_html_entities("Don&#39;t stop &lt;now&gt;"),
+            "Don't stop <now>"
+        );
+    }
 
     #[test]
     fn test_clean_html_description() {

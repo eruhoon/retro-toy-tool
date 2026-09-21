@@ -24,7 +24,8 @@ pub fn run() {
             search_game_metadata_cmd,
             test_screenscraper_account_cmd,
             download_and_upload_scraped_image_cmd,
-            download_and_upload_scraped_video_cmd
+            download_and_upload_scraped_video_cmd,
+            upload_rom_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

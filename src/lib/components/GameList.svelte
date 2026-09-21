@@ -1,6 +1,20 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import type { GameItem, GameStatus } from '../types';
-  import { Search, Star, Image, ImageOff, AlertCircle, FileText, CheckCircle2, ChevronsRight, ChevronsLeft, Film } from 'lucide-svelte';
+  import {
+    Search,
+    Star,
+    Image,
+    ImageOff,
+    AlertCircle,
+    FileText,
+    CheckCircle2,
+    ChevronsRight,
+    ChevronsLeft,
+    Film,
+    FolderUp,
+  } from 'lucide-svelte';
 
   let {
     games = [],
@@ -8,17 +22,66 @@
     isLoading = false,
     isSidebarOpen = true,
     systemName = '',
+    hasSelectedSystem = false,
     onSelectGame = () => {},
     onToggleSidebar = () => {},
+    onUploadFiles = () => {},
   } = $props<{
     games: GameItem[];
     selectedGame: GameItem | null;
     isLoading: boolean;
     isSidebarOpen?: boolean;
     systemName?: string;
+    hasSelectedSystem?: boolean;
     onSelectGame: (game: GameItem) => void;
     onToggleSidebar?: () => void;
+    onUploadFiles?: (paths: string[]) => void;
   }>();
+
+  let listContainerEl = $state<HTMLDivElement | null>(null);
+  let isDragOver = $state(false);
+
+  onMount(() => {
+    let unlistenFn: (() => void) | null = null;
+    try {
+      const appWindow = getCurrentWebviewWindow();
+      appWindow.onDragDropEvent((event) => {
+        if (event.payload.type === 'over') {
+          const { x, y } = event.payload.position;
+          if (listContainerEl) {
+            const rect = listContainerEl.getBoundingClientRect();
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+              isDragOver = true;
+              return;
+            }
+          }
+          isDragOver = false;
+        } else if (event.payload.type === 'drop') {
+          const { x, y } = event.payload.position;
+          const paths = event.payload.paths;
+          let isInside = false;
+          if (listContainerEl) {
+            const rect = listContainerEl.getBoundingClientRect();
+            isInside = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+          }
+          isDragOver = false;
+          if (isInside && paths && paths.length > 0) {
+            onUploadFiles(paths);
+          }
+        } else if (event.payload.type === 'leave') {
+          isDragOver = false;
+        }
+      }).then((unlisten) => {
+        unlistenFn = unlisten;
+      });
+    } catch (err) {
+      console.warn('onDragDropEvent failed to register:', err);
+    }
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  });
 
   type FilterType = 'all' | 'unregistered' | 'missing_image' | 'favorite';
   let activeFilter = $state<FilterType>('all');
@@ -72,7 +135,23 @@
   }
 </script>
 
-<div class="game-list-container">
+<div class="game-list-container" bind:this={listContainerEl}>
+  {#if isDragOver}
+    <div class="drag-drop-overlay" class:error={!hasSelectedSystem}>
+      <div class="drag-drop-card">
+        <FolderUp size={44} class="drop-icon" />
+        {#if hasSelectedSystem}
+          <h3>[{systemName}] 폴더로 ROM 파일 복사</h3>
+          <p>여기에 파일을 놓으면 기기의 해당 폴더로 자동 전송됩니다.</p>
+          <span class="sub-note">단일/다중 파일 및 폴더 드롭 지원</span>
+        {:else}
+          <h3 class="warn-title">콘솔 플랫폼을 먼저 선택해주세요</h3>
+          <p>좌측 목록에서 롬을 넣을 콘솔 플랫폼을 선택한 후 드롭해주세요.</p>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <div class="toolbar">
     <div class="toolbar-left">
       {#if isSidebarOpen}
@@ -256,12 +335,85 @@
   @use '../../styles/variables' as *;
 
   .game-list-container {
+    position: relative;
     flex: 1;
     display: flex;
     flex-direction: column;
     height: 100%;
     overflow: hidden;
     background: $bg-primary;
+  }
+
+  .drag-drop-overlay {
+    position: absolute;
+    inset: 6px;
+    z-index: 50;
+    background: rgba(15, 23, 42, 0.88);
+    border: 2px dashed #3b82f6;
+    border-radius: 10px;
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    animation: fade-in-scale 0.15s ease-out;
+
+    &.error {
+      border-color: #ef4444;
+      background: rgba(40, 10, 15, 0.88);
+      .drop-icon {
+        color: #ef4444;
+      }
+    }
+
+    .drag-drop-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 24px 32px;
+      max-width: 440px;
+
+      .drop-icon {
+        color: #3b82f6;
+        margin-bottom: 12px;
+        animation: bounce 1.2s infinite ease-in-out;
+      }
+
+      h3 {
+        margin: 0 0 6px 0;
+        font-size: 16px;
+        font-weight: 700;
+        color: #f8fafc;
+
+        &.warn-title {
+          color: #f87171;
+        }
+      }
+
+      p {
+        margin: 0 0 10px 0;
+        font-size: 13px;
+        color: #94a3b8;
+      }
+
+      .sub-note {
+        font-size: 11px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #cbd5e1;
+        padding: 3px 8px;
+        border-radius: 4px;
+      }
+    }
+  }
+
+  @keyframes bounce {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
   }
 
   .toolbar {

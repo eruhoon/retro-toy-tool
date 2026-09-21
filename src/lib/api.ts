@@ -1,8 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   ConnectionTestResult,
   DeviceProfile,
   GameItem,
+  RomUploadProgressPayload,
+  RomUploadResult,
   ScrapedGame,
   ScreenScraperAccountStatus,
   StorageLocation,
@@ -219,6 +222,31 @@ export async function downloadAndUploadScrapedVideo(
     systemId,
     romFilename,
     videoUrl,
+  });
+}
+
+export async function uploadRomFiles(
+  device: DeviceProfile,
+  systemId: string,
+  localPaths: string[],
+  romsPathOverride?: string
+): Promise<RomUploadResult> {
+  return await invoke<RomUploadResult>('upload_rom_files', {
+    host: device.host,
+    port: device.port,
+    username: device.username,
+    password: device.password,
+    romsPath: romsPathOverride || device.roms_path,
+    systemId,
+    localPaths,
+  });
+}
+
+export async function onRomUploadProgress(
+  callback: (payload: RomUploadProgressPayload) => void
+): Promise<UnlistenFn> {
+  return await listen<RomUploadProgressPayload>('rom_upload_progress', (event) => {
+    callback(event.payload);
   });
 }
 

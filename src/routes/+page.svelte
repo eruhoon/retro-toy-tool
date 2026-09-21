@@ -1,7 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { DeviceProfile, GameItem, ScraperSettings, StorageLocation, SystemPlatform } from '$lib/types';
-  import { getSystems, getSystemGames, saveSystemGames, detectStorages } from '$lib/api';
+  import type {
+    DeviceProfile,
+    GameItem,
+    RomUploadProgressPayload,
+    RomUploadResult,
+    ScraperSettings,
+    StorageLocation,
+    SystemPlatform,
+  } from '$lib/types';
+  import {
+    getSystems,
+    getSystemGames,
+    saveSystemGames,
+    detectStorages,
+    uploadRomFiles,
+    onRomUploadProgress,
+  } from '$lib/api';
   import {
     loadProfiles,
     saveProfiles,
@@ -17,6 +32,7 @@
   import MetadataEditor from '$lib/components/MetadataEditor.svelte';
   import SettingsModal from '$lib/components/SettingsModal.svelte';
   import ScraperModal from '$lib/components/ScraperModal.svelte';
+  import RomUploadModal from '$lib/components/RomUploadModal.svelte';
   import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle } from 'lucide-svelte';
 
   let profiles = $state<DeviceProfile[]>([]);
@@ -54,6 +70,12 @@
   let toastMessage = $state<string | null>(null);
   let toastType = $state<'success' | 'error' | 'info'>('info');
 
+  // ROM File Upload State
+  let isUploadModalOpen = $state(false);
+  let isUploadingRoms = $state(false);
+  let uploadProgress = $state<RomUploadProgressPayload | null>(null);
+  let uploadResult = $state<RomUploadResult | null>(null);
+
   function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
     toastMessage = msg;
     toastType = type;
@@ -62,7 +84,58 @@
     }, 4000);
   }
 
+  async function handleUploadFiles(paths: string[]) {
+    if (!activeDevice) {
+      showToast('연결된 기기가 없습니다.', 'error');
+      return;
+    }
+    if (!selectedSystemId) {
+      showToast('ROM을 업로드할 콘솔 플랫폼을 먼저 선택해주세요.', 'error');
+      return;
+    }
+    if (!paths || paths.length === 0) return;
+
+    isUploadModalOpen = true;
+    isUploadingRoms = true;
+    uploadProgress = null;
+    uploadResult = null;
+
+    try {
+      const res = await uploadRomFiles(activeDevice, selectedSystemId, paths, activeStoragePath);
+      uploadResult = res;
+
+      // Automatically refresh game list & system rom counts
+      games = await getSystemGames(activeDevice, selectedSystemId, activeStoragePath);
+      systems = await getSystems(activeDevice, activeStoragePath);
+
+      if (res.failed_files.length === 0) {
+        showToast(`${res.success_count}개 ROM 파일 복사 완료`, 'success');
+      } else {
+        showToast(`${res.success_count}개 성공, ${res.failed_files.length}개 실패`, 'error');
+      }
+    } catch (err: any) {
+      console.error('ROM 업로드 실패:', err);
+      uploadResult = {
+        success_count: 0,
+        failed_files: [String(err?.message || err)],
+        message: '업로드 중 오류가 발생했습니다: ' + (err?.message || err),
+      };
+      showToast('ROM 복사 실패: ' + (err?.message || err), 'error');
+    } finally {
+      isUploadingRoms = false;
+    }
+  }
+
   onMount(() => {
+    let unlistenProgress: (() => void) | null = null;
+    onRomUploadProgress((payload) => {
+      uploadProgress = payload;
+    }).then((unlisten) => {
+      unlistenProgress = unlisten;
+    }).catch((err) => {
+      console.warn('onRomUploadProgress 리스너 등록 실패:', err);
+    });
+
     profiles = loadProfiles();
     const lastId = loadActiveDeviceId();
     if (lastId) {
@@ -77,6 +150,10 @@
     } else {
       connectToDevice(profiles[0]);
     }
+
+    return () => {
+      if (unlistenProgress) unlistenProgress();
+    };
   });
 
   // Watch profiles change and sync to storage
@@ -362,8 +439,10 @@
             isLoading={isLoadingGames}
             isSidebarOpen={isSidebarOpen}
             systemName={selectedSystemName}
+            hasSelectedSystem={!!selectedSystemId}
             onToggleSidebar={() => (isSidebarOpen = !isSidebarOpen)}
             onSelectGame={(g) => (selectedGame = g)}
+            onUploadFiles={handleUploadFiles}
           />
         {:else}
           <div class="no-system-selected">
@@ -417,6 +496,21 @@
     onSavedScraperSettings={() => showToast('스크래퍼 설정이 저장되었습니다.', 'info')}
   />
 
+  <!-- ROM Upload Progress Modal -->
+  <RomUploadModal
+    isOpen={isUploadModalOpen}
+    systemName={selectedSystemName}
+    deviceName={activeDevice?.name || '에뮬레이터 기기'}
+    progress={uploadProgress}
+    result={uploadResult}
+    isUploading={isUploadingRoms}
+    onClose={() => {
+      isUploadModalOpen = false;
+      uploadProgress = null;
+      uploadResult = null;
+    }}
+  />
+
 
   <!-- Device Loading Blocking Overlay -->
   {#if isConnectingDevice}
@@ -424,8 +518,14 @@
       <div class="loading-card">
         <div class="circular-spinner">
           <svg viewBox="0 0 50 50" class="spinner-svg">
-            <circle class="spinner-bg" cx="25" cy="25" r="20" fill="none" stroke-width="4" />
-            <circle class="spinner-bar" cx="25" cy="25" r="20" fill="none" stroke-width="4" />
+            <defs>
+              <linearGradient id="spinner-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#818cf8" />
+                <stop offset="100%" stop-color="#c084fc" />
+              </linearGradient>
+            </defs>
+            <circle class="spinner-bg" cx="25" cy="25" r="20" fill="none" stroke-width="3.5" />
+            <circle class="spinner-bar" cx="25" cy="25" r="20" fill="none" stroke-width="3.5" stroke="url(#spinner-grad)" />
           </svg>
           <div class="spinner-inner-icon">
             <Gamepad2 size={22} />
@@ -618,27 +718,30 @@
 
     .circular-spinner {
       position: relative;
-      width: 72px;
-      height: 72px;
+      width: 76px;
+      height: 76px;
       display: flex;
       align-items: center;
       justify-content: center;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+      box-shadow: 0 0 24px rgba(99, 102, 241, 0.25);
 
       .spinner-svg {
         width: 100%;
         height: 100%;
         animation: rotate 1.8s linear infinite;
         transform-origin: center;
+        overflow: visible;
+        border-radius: 50%;
 
         .spinner-bg {
           stroke: rgba(255, 255, 255, 0.08);
         }
 
         .spinner-bar {
-          stroke: #818cf8;
           stroke-linecap: round;
           animation: dash 1.6s ease-in-out infinite;
-          filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.6));
         }
       }
 
@@ -650,6 +753,7 @@
         justify-content: center;
         color: #a5b4fc;
         animation: pulse-icon 1.8s ease-in-out infinite alternate;
+        pointer-events: none;
       }
     }
 

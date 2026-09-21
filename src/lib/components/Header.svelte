@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DeviceProfile } from '../types';
-  import { Gamepad2, Settings, RefreshCw, Save, Sparkles, Loader2, Trash2, Globe } from 'lucide-svelte';
+  import { Settings, RefreshCw, Save, Sparkles, Loader2, Trash2, Globe } from 'lucide-svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
   let {
@@ -60,7 +60,7 @@
 <header class="app-header">
   <div class="brand">
     <div class="logo-icon">
-      <Gamepad2 size={20} />
+      <img src="/favicon.png" alt="Toy Manager" class="brand-logo-img" />
     </div>
     <div class="logo-text">
       {#if activeDevice?.name}
@@ -184,13 +184,18 @@
     .logo-icon {
       width: 32px;
       height: 32px;
-      background: linear-gradient(135deg, $accent-color, #ec4899);
       border-radius: $radius-sm;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
       box-shadow: 0 2px 8px $accent-glow;
+      overflow: hidden;
+
+      .brand-logo-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
     }
 
     .logo-text {

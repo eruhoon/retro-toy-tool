@@ -51,6 +51,23 @@
 
   let lastGamePath = $state<string | null>(null);
 
+  function decodeHtml(text?: string | null): string {
+    if (!text) return '';
+    if (!text.includes('&')) return text;
+    try {
+      const doc = new DOMParser().parseFromString(text, 'text/html');
+      return doc.documentElement.textContent || text;
+    } catch {
+      return text
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+    }
+  }
+
   // Watch game change and load remote image / video if present
   $effect(() => {
     const currentPath = game?.path || null;
@@ -58,6 +75,13 @@
       lastGamePath = currentPath;
       previewImageUrl = null;
       previewVideoUrl = null;
+      if (game) {
+        if (game.name && game.name.includes('&')) game.name = decodeHtml(game.name);
+        if (game.desc && game.desc.includes('&')) game.desc = decodeHtml(game.desc);
+        if (game.developer && game.developer.includes('&')) game.developer = decodeHtml(game.developer);
+        if (game.publisher && game.publisher.includes('&')) game.publisher = decodeHtml(game.publisher);
+        if (game.genre && game.genre.includes('&')) game.genre = decodeHtml(game.genre);
+      }
       if (game?.video && !game?.image) {
         activeMediaTab = 'video';
       }

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use crate::models::{GameItem, GameStatus, SystemPlatform};
 use crate::ssh_client::RemoteSession;
 use crate::gamelist_xml::{parse_gamelist_xml, serialize_gamelist_xml, normalize_rel_path, GameListXml, GameXml};
+use crate::scraper::decode_html_entities;
 
 // Common platform friendly names
 pub fn get_platform_display_name(id: &str) -> String {
@@ -35,6 +36,7 @@ pub fn get_platform_display_name(id: &str) -> String {
         "at7800" => "Atari 7800",
         "lynx" => "Atari Lynx",
         "ports" | "port" => "Ports",
+        "pygame" => "Pygame",
         "scummvm" => "ScummVM",
         "dos" | "pc" => "MS-DOS / PC",
         "pico-8" | "pico8" => "PICO-8",
@@ -55,7 +57,7 @@ fn is_media_or_system_name(name: &str) -> bool {
         "music" | "sound" | "sounds" | "overlays" | "shaders" | "system" |
         "records" | "recordings" | "logs" | "decorations" | "extra" |
         "configs" | "config" | "tools" | "package" | "packages" |
-        "retroarch" | "kodi" | "splash" | "lost+found"
+        "retroarch" | "kodi" | "splash" | "lost+found" | "__pycache__"
     )
 }
 
@@ -86,6 +88,16 @@ fn is_ignored_rom_file(system_id: &str, name: &str) -> bool {
         return true; // Ignore auxiliary data files, text files, and configs in ports root
     }
 
+    // Special handling for Pygame (Batocera / Knulli / ES-DE):
+    // In Pygame, game executables are named with .pygame extension (e.g. game.pygame or main.pygame).
+    // All other files (.py helper modules, .keys pad2key configs, audio, fonts, cache) are internal assets.
+    if sys_lower == "pygame" {
+        if lower.ends_with(".pygame") {
+            return false; // Valid Pygame game launcher
+        }
+        return true; // Ignore auxiliary data files, scripts, assets, configs
+    }
+
     // PICO-8: .p8 and .p8.png are carts!
     if (sys_lower == "pico-8" || sys_lower == "pico8") && lower.ends_with(".p8.png") {
         return false;
@@ -111,7 +123,15 @@ fn is_ignored_rom_file(system_id: &str, name: &str) -> bool {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mkv", ".avi",
         ".db", ".sh", ".bat", ".dat",
         ".srm", ".sav", ".dsv", ".rtc", ".cht", ".mcr", ".mpk", ".nvram", ".bsv",
-        ".ips", ".bps", ".ups", ".opt", ".rmp"
+        ".ips", ".bps", ".ups", ".opt", ".rmp",
+        // Controller mappings & configurations
+        ".keys", ".mapping", ".map",
+        // Fonts
+        ".otf", ".ttf", ".woff", ".woff2", ".fnt", ".fon",
+        // Python cache / bytecode
+        ".pyc", ".pyo", ".pyd",
+        // Audio formats (soundtrack/assets, never standalone game ROMs)
+        ".mp3", ".wav", ".ogg", ".flac", ".mid", ".midi", ".m4a", ".aac", ".wma"
     ];
 
     for ext in IGNORED_EXTS {
@@ -262,9 +282,14 @@ async fn collect_system_roms(
             "sh -c 'TARGET=\"{}\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 2 -type f \\( -name \"*.sh\" -o -name \"*.squashfs\" \\) ! -name \".*\" ! -path \"*/[pP]ort[mM]aster/*\" 2>/dev/null'",
             clean_sys_path
         )
+    } else if system_id.eq_ignore_ascii_case("pygame") {
+        format!(
+            "sh -c 'TARGET=\"{}\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 3 -type f \\( -name \"*.pygame\" -o -name \"*.PYGAME\" -o -name \"*.png\" -o -name \"*.PNG\" -o -name \"*.jpg\" -o -name \"*.JPG\" -o -name \"*.jpeg\" -o -name \"*.JPEG\" -o -name \"*.webp\" -o -name \"*.mp4\" -o -name \"*.MP4\" -o -name \"*.mkv\" \\) ! -name \".*\" ! -name \"*.keys\" ! -path \"*/__pycache__/*\" 2>/dev/null'",
+            clean_sys_path
+        )
     } else {
         format!(
-            "sh -c 'TARGET=\"{}\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 3 -type f 2>/dev/null; find \"$TARGET\" -maxdepth 2 -type d \\( -name \"*.scummvm\" -o -name \"*.pc\" -o -name \"*.dos\" -o -name \"*.squashfs\" \\) 2>/dev/null'",
+            "sh -c 'TARGET=\"{}\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 3 -type f ! -path \"*/__pycache__/*\" 2>/dev/null; find \"$TARGET\" -maxdepth 2 -type d \\( -name \"*.scummvm\" -o -name \"*.pc\" -o -name \"*.dos\" -o -name \"*.squashfs\" \\) 2>/dev/null'",
             clean_sys_path
         )
     };
@@ -283,7 +308,7 @@ async fn collect_system_roms(
 
                 if let Some(rel) = line.strip_prefix(clean_sys_path) {
                     let rel_path = rel.trim_start_matches('/').to_string();
-                    if rel_path.is_empty() {
+                    if rel_path.is_empty() || rel_path.to_lowercase().contains("__pycache__") {
                         continue;
                     }
                     let filename = rel_path.rsplit('/').next().unwrap_or(&rel_path).to_string();
@@ -417,7 +442,7 @@ pub async fn scan_systems(session: &RemoteSession, roms_path: &str) -> Result<Ve
 
     // 1. Fast SSH scan for all systems at once (0.3s instead of 500+ SFTP packets)
     let survey_cmd = format!(
-        "sh -c 'BASE=\"{}\"; for d in \"$BASE\"/*; do [ -d \"$d\" ] || continue; s=$(basename \"$d\"); case \"$s\" in images|media|videos|marquees|thumbnails|covers|screenshots|wheels|titles|fanart|manuals|bios|savestates|saves|themes|theme|downloads|download|backups|backup|cheats|music|sound|sounds|overlays|shaders|system|records|recordings|logs|decorations|extra|configs|config|tools|package|packages|retroarch|kodi|splash|lost+found|.*) continue ;; esac; has_xml=0; [ -f \"$d/gamelist.xml\" ] && has_xml=1; if [ \"$s\" = \"ports\" ] || [ \"$s\" = \"port\" ]; then cnt=$(find \"$d\" -maxdepth 2 -type f \\( -name \"*.sh\" -o -name \"*.squashfs\" \\) ! -name \".*\" ! -path \"*/[pP]ort[mM]aster/*\" 2>/dev/null | wc -l); else has_cue=$(find \"$d\" -maxdepth 3 -type f \\( -name \"*.cue\" -o -name \"*.CUE\" -o -name \"*.m3u\" -o -name \"*.M3U\" -o -name \"*.gdi\" -o -name \"*.GDI\" -o -name \"*.ccd\" -o -name \"*.CCD\" \\) 2>/dev/null | head -n 1); if [ -n \"$has_cue\" ]; then cnt=$(find \"$d\" -maxdepth 3 -type f ! -name \".*\" ! -name \"*.xml*\" ! -name \"*.bak\" ! -name \"*.json\" ! -name \"*.yaml\" ! -name \"*.yml\" ! -name \"*.txt\" ! -name \"*.nfo\" ! -name \"*.md\" ! -name \"*.log\" ! -name \"*.pdf\" ! -name \"*.doc*\" ! -name \"*.rtf\" ! -name \"*.ini\" ! -name \"*.cfg\" ! -name \"*.conf\" ! -name \"*.db\" ! -name \"*[tT]humbs.db*\" ! -name \"*desktop.ini*\" ! -name \"*.png\" ! -name \"*.PNG\" ! -name \"*.jpg\" ! -name \"*.JPG\" ! -name \"*.jpeg\" ! -name \"*.JPEG\" ! -name \"*.gif\" ! -name \"*.GIF\" ! -name \"*.webp\" ! -name \"*.mp4\" ! -name \"*.MP4\" ! -name \"*.mkv\" ! -name \"*.avi\" ! -name \"*.dat\" ! -name \"*.sh\" ! -name \"*.bat\" ! -name \"*.srm\" ! -name \"*.SRM\" ! -name \"*.sav*\" ! -name \"*.SAV*\" ! -name \"*.state*\" ! -name \"*.dsv\" ! -name \"*.DSV\" ! -name \"*.rtc*\" ! -name \"*.RTC*\" ! -name \"*.cht*\" ! -name \"*.CHT*\" ! -name \"*.ips*\" ! -name \"*.IPS*\" ! -name \"*.bps*\" ! -name \"*.BPS*\" ! -name \"*.ups*\" ! -name \"*.opt*\" ! -name \"*.rmp*\" ! -name \"*.nvram*\" ! -name \"*.mcr*\" ! -name \"*.mpk*\" ! -name \"*.bin\" ! -name \"*.BIN\" ! -name \"*.img\" ! -name \"*.IMG\" ! -path \"*/images/*\" ! -path \"*/media/*\" ! -path \"*/videos/*\" ! -path \"*/thumbnails/*\" ! -path \"*/covers/*\" ! -path \"*/screenshots/*\" ! -path \"*/wheels/*\" ! -path \"*/titles/*\" ! -path \"*/fanart/*\" ! -path \"*/manuals/*\" ! -path \"*/portmaster/*\" ! -path \"*/saves/*\" ! -path \"*/save/*\" ! -path \"*/states/*\" ! -path \"*/savestates/*\" ! -path \"*/cheats/*\" ! -path \"*/backup/*\" ! -path \"*/backups/*\" 2>/dev/null | wc -l); else cnt=$(find \"$d\" -maxdepth 3 -type f ! -name \".*\" ! -name \"*.xml*\" ! -name \"*.bak\" ! -name \"*.json\" ! -name \"*.yaml\" ! -name \"*.yml\" ! -name \"*.txt\" ! -name \"*.nfo\" ! -name \"*.md\" ! -name \"*.log\" ! -name \"*.pdf\" ! -name \"*.doc*\" ! -name \"*.rtf\" ! -name \"*.ini\" ! -name \"*.cfg\" ! -name \"*.conf\" ! -name \"*.db\" ! -name \"*[tT]humbs.db*\" ! -name \"*desktop.ini*\" ! -name \"*.png\" ! -name \"*.PNG\" ! -name \"*.jpg\" ! -name \"*.JPG\" ! -name \"*.jpeg\" ! -name \"*.JPEG\" ! -name \"*.gif\" ! -name \"*.GIF\" ! -name \"*.webp\" ! -name \"*.mp4\" ! -name \"*.MP4\" ! -name \"*.mkv\" ! -name \"*.avi\" ! -name \"*.dat\" ! -name \"*.sh\" ! -name \"*.bat\" ! -name \"*.srm\" ! -name \"*.SRM\" ! -name \"*.sav*\" ! -name \"*.SAV*\" ! -name \"*.state*\" ! -name \"*.dsv\" ! -name \"*.DSV\" ! -name \"*.rtc*\" ! -name \"*.RTC*\" ! -name \"*.cht*\" ! -name \"*.CHT*\" ! -name \"*.ips*\" ! -name \"*.IPS*\" ! -name \"*.bps*\" ! -name \"*.BPS*\" ! -name \"*.ups*\" ! -name \"*.opt*\" ! -name \"*.rmp*\" ! -name \"*.nvram*\" ! -name \"*.mcr*\" ! -name \"*.mpk*\" ! -path \"*/images/*\" ! -path \"*/media/*\" ! -path \"*/videos/*\" ! -path \"*/thumbnails/*\" ! -path \"*/covers/*\" ! -path \"*/screenshots/*\" ! -path \"*/wheels/*\" ! -path \"*/titles/*\" ! -path \"*/fanart/*\" ! -path \"*/manuals/*\" ! -path \"*/portmaster/*\" ! -path \"*/saves/*\" ! -path \"*/save/*\" ! -path \"*/states/*\" ! -path \"*/savestates/*\" ! -path \"*/cheats/*\" ! -path \"*/backup/*\" ! -path \"*/backups/*\" 2>/dev/null | wc -l); fi; fi; echo \"$s|$cnt|$has_xml\"; done'",
+        "sh -c 'BASE=\"{}\"; for d in \"$BASE\"/*; do [ -d \"$d\" ] || continue; s=$(basename \"$d\"); case \"$s\" in images|media|videos|marquees|thumbnails|covers|screenshots|wheels|titles|fanart|manuals|bios|savestates|saves|themes|theme|downloads|download|backups|backup|cheats|music|sound|sounds|overlays|shaders|system|records|recordings|logs|decorations|extra|configs|config|tools|package|packages|retroarch|kodi|splash|lost+found|__pycache__|.*) continue ;; esac; has_xml=0; [ -f \"$d/gamelist.xml\" ] && has_xml=1; if [ \"$s\" = \"ports\" ] || [ \"$s\" = \"port\" ]; then cnt=$(find \"$d\" -maxdepth 2 -type f \\( -name \"*.sh\" -o -name \"*.squashfs\" \\) ! -name \".*\" ! -path \"*/[pP]ort[mM]aster/*\" 2>/dev/null | wc -l); elif [ \"$s\" = \"pygame\" ]; then cnt=$(find \"$d\" -maxdepth 3 -type f \\( -name \"*.pygame\" -o -name \"*.PYGAME\" \\) ! -name \".*\" ! -name \"*.keys\" ! -path \"*/__pycache__/*\" 2>/dev/null | wc -l); else has_cue=$(find \"$d\" -maxdepth 3 -type f \\( -name \"*.cue\" -o -name \"*.CUE\" -o -name \"*.m3u\" -o -name \"*.M3U\" -o -name \"*.gdi\" -o -name \"*.GDI\" -o -name \"*.ccd\" -o -name \"*.CCD\" \\) 2>/dev/null | head -n 1); if [ -n \"$has_cue\" ]; then cnt=$(find \"$d\" -maxdepth 3 -type f ! -name \".*\" ! -name \"*.xml*\" ! -name \"*.bak\" ! -name \"*.json\" ! -name \"*.yaml\" ! -name \"*.yml\" ! -name \"*.txt\" ! -name \"*.nfo\" ! -name \"*.md\" ! -name \"*.log\" ! -name \"*.pdf\" ! -name \"*.doc*\" ! -name \"*.rtf\" ! -name \"*.ini\" ! -name \"*.cfg\" ! -name \"*.conf\" ! -name \"*.db\" ! -name \"*[tT]humbs.db*\" ! -name \"*desktop.ini*\" ! -name \"*.keys\" ! -name \"*.keys.*\" ! -name \"*.otf\" ! -name \"*.ttf\" ! -name \"*.pyc\" ! -name \"*.pyo\" ! -name \"*.mp3\" ! -name \"*.wav\" ! -name \"*.ogg\" ! -name \"*.flac\" ! -name \"*.png\" ! -name \"*.PNG\" ! -name \"*.jpg\" ! -name \"*.JPG\" ! -name \"*.jpeg\" ! -name \"*.JPEG\" ! -name \"*.gif\" ! -name \"*.GIF\" ! -name \"*.webp\" ! -name \"*.mp4\" ! -name \"*.MP4\" ! -name \"*.mkv\" ! -name \"*.avi\" ! -name \"*.dat\" ! -name \"*.sh\" ! -name \"*.bat\" ! -name \"*.srm\" ! -name \"*.SRM\" ! -name \"*.sav*\" ! -name \"*.SAV*\" ! -name \"*.state*\" ! -name \"*.dsv\" ! -name \"*.DSV\" ! -name \"*.rtc*\" ! -name \"*.RTC*\" ! -name \"*.cht*\" ! -name \"*.CHT*\" ! -name \"*.ips*\" ! -name \"*.IPS*\" ! -name \"*.bps*\" ! -name \"*.BPS*\" ! -name \"*.ups*\" ! -name \"*.opt*\" ! -name \"*.rmp*\" ! -name \"*.nvram*\" ! -name \"*.mcr*\" ! -name \"*.mpk*\" ! -name \"*.bin\" ! -name \"*.BIN\" ! -name \"*.img\" ! -name \"*.IMG\" ! -path \"*/images/*\" ! -path \"*/media/*\" ! -path \"*/videos/*\" ! -path \"*/thumbnails/*\" ! -path \"*/covers/*\" ! -path \"*/screenshots/*\" ! -path \"*/wheels/*\" ! -path \"*/titles/*\" ! -path \"*/fanart/*\" ! -path \"*/manuals/*\" ! -path \"*/portmaster/*\" ! -path \"*/saves/*\" ! -path \"*/save/*\" ! -path \"*/states/*\" ! -path \"*/savestates/*\" ! -path \"*/cheats/*\" ! -path \"*/backup/*\" ! -path \"*/backups/*\" ! -path \"*/__pycache__/*\" 2>/dev/null | wc -l); else cnt=$(find \"$d\" -maxdepth 3 -type f ! -name \".*\" ! -name \"*.xml*\" ! -name \"*.bak\" ! -name \"*.json\" ! -name \"*.yaml\" ! -name \"*.yml\" ! -name \"*.txt\" ! -name \"*.nfo\" ! -name \"*.md\" ! -name \"*.log\" ! -name \"*.pdf\" ! -name \"*.doc*\" ! -name \"*.rtf\" ! -name \"*.ini\" ! -name \"*.cfg\" ! -name \"*.conf\" ! -name \"*.db\" ! -name \"*[tT]humbs.db*\" ! -name \"*desktop.ini*\" ! -name \"*.keys\" ! -name \"*.keys.*\" ! -name \"*.otf\" ! -name \"*.ttf\" ! -name \"*.pyc\" ! -name \"*.pyo\" ! -name \"*.mp3\" ! -name \"*.wav\" ! -name \"*.ogg\" ! -name \"*.flac\" ! -name \"*.png\" ! -name \"*.PNG\" ! -name \"*.jpg\" ! -name \"*.JPG\" ! -name \"*.jpeg\" ! -name \"*.JPEG\" ! -name \"*.gif\" ! -name \"*.GIF\" ! -name \"*.webp\" ! -name \"*.mp4\" ! -name \"*.MP4\" ! -name \"*.mkv\" ! -name \"*.avi\" ! -name \"*.dat\" ! -name \"*.sh\" ! -name \"*.bat\" ! -name \"*.srm\" ! -name \"*.SRM\" ! -name \"*.sav*\" ! -name \"*.SAV*\" ! -name \"*.state*\" ! -name \"*.dsv\" ! -name \"*.DSV\" ! -name \"*.rtc*\" ! -name \"*.RTC*\" ! -name \"*.cht*\" ! -name \"*.CHT*\" ! -name \"*.ips*\" ! -name \"*.IPS*\" ! -name \"*.bps*\" ! -name \"*.BPS*\" ! -name \"*.ups*\" ! -name \"*.opt*\" ! -name \"*.rmp*\" ! -name \"*.nvram*\" ! -name \"*.mcr*\" ! -name \"*.mpk*\" ! -path \"*/images/*\" ! -path \"*/media/*\" ! -path \"*/videos/*\" ! -path \"*/thumbnails/*\" ! -path \"*/covers/*\" ! -path \"*/screenshots/*\" ! -path \"*/wheels/*\" ! -path \"*/titles/*\" ! -path \"*/fanart/*\" ! -path \"*/manuals/*\" ! -path \"*/portmaster/*\" ! -path \"*/saves/*\" ! -path \"*/save/*\" ! -path \"*/states/*\" ! -path \"*/savestates/*\" ! -path \"*/cheats/*\" ! -path \"*/backup/*\" ! -path \"*/backups/*\" ! -path \"*/__pycache__/*\" 2>/dev/null | wc -l); fi; fi; echo \"$s|$cnt|$has_xml\"; done'",
         clean_roms_path
     );
 
@@ -634,8 +659,17 @@ pub async fn load_system_games(
             (GameStatus::Missing, 0)
         };
 
-        let default_name = clean_rom_name(&filename);
-        let name = g.name.unwrap_or(default_name);
+        let default_name = if (filename.eq_ignore_ascii_case("main.pygame") || filename.eq_ignore_ascii_case("main.sh")) && rel_path.contains('/') {
+            let parent = rel_path.split('/').next().unwrap_or(&filename);
+            clean_rom_name(parent)
+        } else {
+            clean_rom_name(&filename)
+        };
+        let name = decode_html_entities(&g.name.unwrap_or(default_name));
+        let desc = decode_html_entities(&g.desc.unwrap_or_default());
+        let developer = g.developer.map(|s| decode_html_entities(&s));
+        let publisher = g.publisher.map(|s| decode_html_entities(&s));
+        let genre = g.genre.map(|s| decode_html_entities(&s));
 
         let mut image = g.image;
         if image.is_none() || image.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
@@ -651,15 +685,15 @@ pub async fn load_system_games(
             path: g.path,
             filename,
             name,
-            desc: g.desc.unwrap_or_default(),
+            desc,
             image,
             thumbnail: g.thumbnail,
             video,
             rating: g.rating,
             releasedate: g.releasedate,
-            developer: g.developer,
-            publisher: g.publisher,
-            genre: g.genre,
+            developer,
+            publisher,
+            genre,
             players: g.players,
             favorite: g.favorite.unwrap_or(false),
             hidden: g.hidden.unwrap_or(false),
@@ -673,7 +707,12 @@ pub async fn load_system_games(
         let clean_file_rel = normalize_rel_path(&file.rel_path, system_id);
         if !matched_rel_paths.contains(&file.rel_path) && !seen_game_paths.contains(&clean_file_rel) {
             seen_game_paths.insert(clean_file_rel);
-            let default_name = clean_rom_name(&file.filename);
+            let default_name = if (file.filename.eq_ignore_ascii_case("main.pygame") || file.filename.eq_ignore_ascii_case("main.sh")) && file.rel_path.contains('/') {
+                let parent = file.rel_path.split('/').next().unwrap_or(&file.filename);
+                clean_rom_name(parent)
+            } else {
+                clean_rom_name(&file.filename)
+            };
             let image = find_auto_media(&file.filename, &detected_images);
             let video = find_auto_media(&file.filename, &detected_videos);
 
@@ -809,6 +848,26 @@ mod tests {
         assert!(is_ignored_rom_file("ports", "readme.txt"));
         assert!(is_ignored_rom_file("ports", "config.json"));
         assert!(is_ignored_rom_file("ports", "cover.png"));
+
+        // Pygame specific tests:
+        // .pygame is the valid game executable
+        assert!(!is_ignored_rom_file("pygame", "pygun.pygame"));
+        assert!(!is_ignored_rom_file("pygame", "retrotrivia.pygame"));
+        assert!(!is_ignored_rom_file("pygame", "main.pygame"));
+        // Pygame helper modules, pad2key configs, bytecode, fonts, audio should all be ignored!
+        assert!(is_ignored_rom_file("pygame", "pygun.pygame.keys"));
+        assert!(is_ignored_rom_file("pygame", "Bifocals.otf"));
+        assert!(is_ignored_rom_file("pygame", "gun.mp3"));
+        assert!(is_ignored_rom_file("pygame", "playeranswered.wav"));
+        assert!(is_ignored_rom_file("pygame", "questions.py"));
+        assert!(is_ignored_rom_file("pygame", "gamelists.py"));
+        assert!(is_ignored_rom_file("pygame", "gamelists.cpython-312.pyc"));
+        assert!(is_ignored_rom_file("pygame", "reload0.mp3"));
+
+        // General ignored media/fonts across any console
+        assert!(is_ignored_rom_file("snes", "theme.mp3"));
+        assert!(is_ignored_rom_file("snes", "font.ttf"));
+        assert!(is_ignored_rom_file("snes", "custom.keys"));
     }
 
     #[test]

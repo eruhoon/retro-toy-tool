@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use russh::client::{self, Handler};
 use russh_sftp::client::SftpSession;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct ClientHandler;
 
@@ -141,6 +141,62 @@ impl RemoteSession {
             .map_err(|e| format!("파일 닫기 실패 ({}): {}", path, e))?;
 
         Ok(())
+    }
+
+    pub async fn write_file_from_local<F>(
+        &self,
+        local_path: &std::path::Path,
+        remote_path: &str,
+        mut on_progress: F,
+    ) -> Result<u64, String>
+    where
+        F: FnMut(u64),
+    {
+        let normalized = remote_path.replace('\\', "/");
+        if let Some(pos) = normalized.rfind('/') {
+            let parent_dir = &normalized[..pos];
+            if !parent_dir.is_empty() {
+                self.create_dir_all(parent_dir).await?;
+            }
+        }
+
+        let mut local_file = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|e| format!("로컬 파일 열기 실패 ({}): {}", local_path.display(), e))?;
+
+        let mut remote_file = self.sftp
+            .create(&normalized)
+            .await
+            .map_err(|e| format!("원격 파일 생성 실패 ({}): {}", normalized, e))?;
+
+        let mut buffer = vec![0u8; 256 * 1024]; // 256KB buffer for high throughput
+        let mut total_written = 0u64;
+
+        loop {
+            let bytes_read = local_file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| format!("로컬 파일 읽기 실패: {}", e))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            remote_file
+                .write_all(&buffer[..bytes_read])
+                .await
+                .map_err(|e| format!("원격 파일 쓰기 실패: {}", e))?;
+
+            total_written += bytes_read as u64;
+            on_progress(total_written);
+        }
+
+        remote_file
+            .close()
+            .await
+            .map_err(|e| format!("원격 파일 닫기 실패: {}", e))?;
+
+        Ok(total_written)
     }
 
     pub async fn exec_command(&self, cmd: &str) -> Result<String, String> {
