@@ -33,6 +33,8 @@
   import SettingsModal from '$lib/components/SettingsModal.svelte';
   import ScraperModal from '$lib/components/ScraperModal.svelte';
   import RomUploadModal from '$lib/components/RomUploadModal.svelte';
+  import UpdaterModal from '$lib/components/UpdaterModal.svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle } from 'lucide-svelte';
 
   let profiles = $state<DeviceProfile[]>([]);
@@ -75,6 +77,13 @@
   let isUploadingRoms = $state(false);
   let uploadProgress = $state<RomUploadProgressPayload | null>(null);
   let uploadResult = $state<RomUploadResult | null>(null);
+
+  // Auto-updater State
+  let isUpdaterModalOpen = $state(false);
+  let updateVersion = $state('');
+  let updateBody = $state<string | null>(null);
+  let updateCurrentVersion = $state('');
+  let hasUpdate = $state(false);
 
   function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
     toastMessage = msg;
@@ -135,6 +144,21 @@
     }).catch((err) => {
       console.warn('onRomUploadProgress 리스너 등록 실패:', err);
     });
+
+    // Check for app updates silently on startup
+    invoke<{ version: string; body: string | null; current_version: string } | null>('check_update')
+      .then((info) => {
+        if (info) {
+          updateVersion = info.version;
+          updateBody = info.body;
+          updateCurrentVersion = info.current_version;
+          hasUpdate = true;
+          isUpdaterModalOpen = true;
+        }
+      })
+      .catch((err) => {
+        console.warn('업데이트 확인 실패:', err);
+      });
 
     profiles = loadProfiles();
     const lastId = loadActiveDeviceId();
@@ -391,12 +415,14 @@
     {isDirty}
     {isSaving}
     isLoading={isConnectingDevice || isLoadingSystems || isLoadingGames}
+    {hasUpdate}
     onOpenSettings={() => openSettings('device')}
     onDeviceSelect={handleDeviceSelect}
     onRefresh={handleRefresh}
     onSaveGamelist={handleSaveGamelist}
     onBatchRegister={handleBatchRegister}
     onBatchCleanMissing={handleBatchCleanMissing}
+    onOpenUpdater={() => (isUpdaterModalOpen = true)}
   />
 
   <main class="main-content">
@@ -509,6 +535,15 @@
       uploadProgress = null;
       uploadResult = null;
     }}
+  />
+
+  <!-- Auto-updater Modal -->
+  <UpdaterModal
+    bind:isOpen={isUpdaterModalOpen}
+    version={updateVersion}
+    body={updateBody}
+    currentVersion={updateCurrentVersion}
+    onDismiss={() => { isUpdaterModalOpen = false; }}
   />
 
 

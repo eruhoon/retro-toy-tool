@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DeviceProfile } from '../types';
-  import { Settings, RefreshCw, Save, Sparkles, Loader2, Trash2, Globe } from 'lucide-svelte';
+  import { Settings, RefreshCw, Save, Sparkles, Loader2, Trash2, Globe, ArrowUpCircle } from 'lucide-svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
   let {
@@ -10,6 +10,7 @@
     isDirty = false,
     isSaving = false,
     isLoading = false,
+    hasUpdate = false,
     onOpenSettings = () => {},
     onOpenDeviceModal = () => {},
     onDeviceSelect = () => {},
@@ -18,6 +19,7 @@
     onBatchRegister = () => {},
     onBatchCleanMissing = () => {},
     onOpenScraperSettings = () => {},
+    onOpenUpdater = () => {},
   } = $props<{
     activeDevice: DeviceProfile | null;
     profiles: DeviceProfile[];
@@ -25,6 +27,7 @@
     isDirty: boolean;
     isSaving: boolean;
     isLoading: boolean;
+    hasUpdate?: boolean;
     onOpenSettings?: () => void;
     onOpenDeviceModal?: () => void;
     onDeviceSelect: (id: string) => void;
@@ -33,6 +36,7 @@
     onBatchRegister: () => void;
     onBatchCleanMissing?: () => void;
     onOpenScraperSettings?: () => void;
+    onOpenUpdater?: () => void;
   }>();
 
   $effect(() => {
@@ -112,6 +116,16 @@
   </div>
 
   <div class="header-actions">
+    {#if hasUpdate}
+      <button
+        class="btn-update-badge"
+        onclick={onOpenUpdater}
+        title="새 버전을 사용할 수 있습니다. 클릭하여 업데이트"
+      >
+        <ArrowUpCircle size={14} />
+        <span>업데이트 가능</span>
+      </button>
+    {/if}
     {#if activeDevice && selectedSystemId}
       <button
         class="btn-secondary action-btn"
@@ -308,6 +322,27 @@
         animation: pulse-glow 2s infinite;
       }
     }
+
+    .btn-update-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.45);
+      color: #818cf8;
+      border-radius: $radius-md;
+      cursor: pointer;
+      animation: update-pulse 2.5s ease-in-out infinite;
+      transition: background 0.15s, transform 0.1s;
+
+      &:hover {
+        background: rgba(99, 102, 241, 0.22);
+        transform: translateY(-1px);
+      }
+    }
   }
 
   @keyframes pulse-glow {
@@ -316,6 +351,15 @@
     }
     50% {
       box-shadow: 0 0 12px $accent-color;
+    }
+  }
+
+  @keyframes update-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 rgba(99, 102, 241, 0);
+    }
+    50% {
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
     }
   }
 </style>

@@ -4,13 +4,16 @@ pub mod gamelist_xml;
 pub mod rom_scanner;
 pub mod scraper;
 pub mod commands;
+pub mod updater;
 
 use commands::*;
+use updater::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             test_connection,
             detect_storages_cmd,
@@ -25,7 +28,9 @@ pub fn run() {
             test_screenscraper_account_cmd,
             download_and_upload_scraped_image_cmd,
             download_and_upload_scraped_video_cmd,
-            upload_rom_files
+            upload_rom_files,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

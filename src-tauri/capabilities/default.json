@@ -8,6 +8,9 @@
     "core:event:default",
     "core:webview:default",
     "opener:default",
-    "core:window:allow-set-title"
+    "core:window:allow-set-title",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
   ]
 }
