@@ -1,6 +1,6 @@
 [package]
 name = "retro-toy-tool"
-version = "0.1.0"
+version = "0.2.0"
 description = "Retro Toy Tool - Emulation Device Game & ROM Manager"
 authors = ["eruhoon"]
 edition = "2021"

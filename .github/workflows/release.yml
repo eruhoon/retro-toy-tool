@@ -1,0 +1,115 @@
+name: Release App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Force release build regardless of version bump check'
+        required: false
+        type: boolean
+        default: false
+
+# Ensure the workflow has permission to create git tags and release assets
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check Version Bump
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Evaluate version change
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag_name=v$VERSION" >> "$GITHUB_OUTPUT"
+            echo "reason=Forced release via workflow_dispatch" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/check-version.js
+          fi
+
+      - name: Log decision
+        run: |
+          echo "Decision: ${{ steps.check.outputs.reason }}"
+          echo "Should Release: ${{ steps.check.outputs.should_release }}"
+
+  build-tauri:
+    name: Build & Release (${{ matrix.platform }})
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+          - platform: 'ubuntu-22.04'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build Tauri app and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.check-version.outputs.tag_name }}
+          releaseName: 'retro-toy-tool ${{ needs.check-version.outputs.tag_name }}'
+          releaseBody: '자동 빌드된 retro-toy-tool ${{ needs.check-version.outputs.tag_name }} 릴리즈입니다.'
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
