@@ -38,6 +38,7 @@
   import ScraperModal from '$lib/components/ScraperModal.svelte';
   import RomUploadModal from '$lib/components/RomUploadModal.svelte';
   import UpdaterModal from '$lib/components/UpdaterModal.svelte';
+  import { isCoreMatchingSystem } from '$lib/utils/coreUtils';
   import { invoke } from '@tauri-apps/api/core';
   import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-svelte';
 
@@ -116,28 +117,7 @@
 
   let matchedCoresCount = $derived.by(() => {
     if (!selectedSystemId) return installedCores.length;
-    const sysId = selectedSystemId.toLowerCase();
-    return installedCores.filter((c) => {
-      if (c.supported_systems.map((s) => s.toLowerCase()).includes(sysId)) return true;
-      const cid = c.id.toLowerCase();
-      const sname = c.system_name.toLowerCase();
-      if (sysId === 'gba' && (cid.includes('mgba') || cid.includes('gpsp') || cid.includes('vbam'))) return true;
-      if (sysId === 'gb' && (cid.includes('gambatte') || cid.includes('mgba') || cid.includes('gearboy'))) return true;
-      if (sysId === 'gbc' && (cid.includes('gambatte') || cid.includes('mgba') || cid.includes('gearboy'))) return true;
-      if (sysId === 'snes' && (cid.includes('snes') || cid.includes('bsnes') || cid.includes('mesen-s'))) return true;
-      if (sysId === 'nes' && (cid.includes('fceumm') || cid.includes('nestopia') || cid.includes('mesen'))) return true;
-      if (sysId === 'psx' && (cid.includes('pcsx') || cid.includes('duckstation') || cid.includes('swanstation') || cid.includes('mednafen_psx'))) return true;
-      if (sysId === 'psp' && cid.includes('ppsspp')) return true;
-      if (sysId === 'n64' && (cid.includes('mupen64') || cid.includes('parallel'))) return true;
-      if (sysId === 'megadrive' || sysId === 'genesis') {
-        if (cid.includes('genesis_plus') || cid.includes('picodrive')) return true;
-      }
-      if (sysId === 'fbneo' || sysId === 'fba') {
-        if (cid.includes('fbneo') || cid.includes('fba')) return true;
-      }
-      if (sysId === 'mame' && cid.includes('mame')) return true;
-      return sname.includes(sysId);
-    }).length;
+    return installedCores.filter((c) => isCoreMatchingSystem(c, selectedSystemId)).length;
   });
 
   async function loadCores(force = false) {
@@ -267,6 +247,7 @@
     selectedSystemId = null;
     games = [];
     selectedGame = null;
+    installedCores = [];
     isDirty = false;
 
     isLoadingSystems = true;
@@ -291,7 +272,7 @@
       }
 
       // Preload installed cores in background
-      loadCores().catch(() => {});
+      loadCores(true).catch(() => {});
     } catch (err: any) {
       console.error('플랫폼 로드 실패:', err);
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { InstalledCore } from '../types';
+  import { isCoreMatchingSystem, getSystemCategory } from '../utils/coreUtils';
   import {
     Search,
     Cpu,
@@ -39,84 +40,37 @@
   // 선택된 기종이 바뀔 때 기본적으로 해당 기종 매칭 코어 보기 모드로
   $effect(() => {
     if (selectedSystemId) {
-      // 기종이 변경되면 showAll을 유지하지 않고 해당 기종에 집중 (원하면 전체 보기 토글 가능)
+      showAll = false;
+      selectedCategory = 'all';
     }
   });
 
-  // 시스템 카테고리 판별 헬퍼
-  function getSystemCategory(core: InstalledCore): string {
-    const text = `${core.system_name} ${core.display_name} ${core.supported_systems.join(' ')}`.toLowerCase();
-    if (text.includes('nintendo') || text.includes('game boy') || text.includes('gba') || text.includes('snes') || text.includes('nes') || text.includes('n64') || text.includes('ds')) {
-      return 'nintendo';
+  // 카테고리 탭 선택 시
+  function handleCategoryClick(cat: 'all' | 'nintendo' | 'sony' | 'sega' | 'arcade' | 'other') {
+    selectedCategory = cat;
+    // 특정 콘솔을 선택한 상태에서 타사 카테고리(Sony, Sega 등)를 누르면 전체 코어 보기로 유연하게 전환
+    if (cat !== 'all' && selectedSystemId) {
+      showAll = true;
     }
-    if (text.includes('playstation') || text.includes('sony') || text.includes('psx') || text.includes('psp') || text.includes('ps2')) {
-      return 'sony';
-    }
-    if (text.includes('sega') || text.includes('genesis') || text.includes('megadrive') || text.includes('saturn') || text.includes('dreamcast') || text.includes('game gear')) {
-      return 'sega';
-    }
-    if (text.includes('arcade') || text.includes('mame') || text.includes('fbneo') || text.includes('neogeo') || text.includes('fba') || text.includes('capcom')) {
-      return 'arcade';
-    }
-    return 'other';
-  }
-
-  // 코어가 현재 선택된 기종을 지원하는지 검사
-  function isCoreMatchingCurrentSystem(core: InstalledCore): boolean {
-    if (!selectedSystemId) return true;
-    const sysId = selectedSystemId.toLowerCase();
-
-    // 1. es_systems.cfg 매핑 확인
-    if (core.supported_systems.map(s => s.toLowerCase()).includes(sysId)) {
-      return true;
-    }
-
-    // 2. core.id 또는 core_name 확인
-    const coreId = core.id.toLowerCase();
-    const coreName = core.core_name.toLowerCase();
-    const sysName = core.system_name.toLowerCase();
-
-    // 특수 매핑 휴리스틱
-    if (sysId === 'gba' && (coreId.includes('mgba') || coreId.includes('gpsp') || coreId.includes('vbam'))) return true;
-    if (sysId === 'gb' && (coreId.includes('gambatte') || coreId.includes('mgba') || coreId.includes('gearboy'))) return true;
-    if (sysId === 'gbc' && (coreId.includes('gambatte') || coreId.includes('mgba') || coreId.includes('gearboy'))) return true;
-    if (sysId === 'snes' && (coreId.includes('snes') || coreId.includes('bsnes') || coreId.includes('mesen-s'))) return true;
-    if (sysId === 'nes' && (coreId.includes('fceumm') || coreId.includes('nestopia') || coreId.includes('mesen'))) return true;
-    if (sysId === 'psx' && (coreId.includes('pcsx') || coreId.includes('duckstation') || coreId.includes('swanstation') || coreId.includes('mednafen_psx'))) return true;
-    if (sysId === 'psp' && coreId.includes('ppsspp')) return true;
-    if (sysId === 'n64' && (coreId.includes('mupen64') || coreId.includes('parallel'))) return true;
-    if (sysId === 'megadrive' || sysId === 'genesis') {
-      if (coreId.includes('genesis_plus') || coreId.includes('picodrive')) return true;
-    }
-    if (sysId === 'fbneo' || sysId === 'fba') {
-      if (coreId.includes('fbneo') || coreId.includes('fba')) return true;
-    }
-    if (sysId === 'mame') {
-      if (coreId.includes('mame')) return true;
-    }
-
-    if (sysName.includes(sysId)) return true;
-
-    return false;
   }
 
   // 현재 기종의 기본 코어인지 확인
   function isDefaultCore(core: InstalledCore): boolean {
     if (!selectedSystemId) return false;
     const sysId = selectedSystemId.toLowerCase();
-    return core.is_default_for.map(s => s.toLowerCase()).includes(sysId);
+    return core.is_default_for.map((s) => s.toLowerCase()).includes(sysId);
   }
 
-  let matchedCount = $derived(cores.filter(isCoreMatchingCurrentSystem).length);
-  // 선택된 기종에 매칭되는 코어가 없거나 showAll이 켜져 있으면 전체 코어 노출
-  let effectiveShowAll = $derived(showAll || matchedCount === 0);
+  let matchedCount = $derived(
+    cores.filter((c: InstalledCore) => isCoreMatchingSystem(c, selectedSystemId)).length
+  );
 
   // 필터링된 코어 목록
   let filteredCores = $derived(
     cores.filter((c: InstalledCore) => {
-      // 1. 현재 기종 필터 (effectiveShowAll이 아닐 경우)
-      if (selectedSystemId && !effectiveShowAll) {
-        if (!isCoreMatchingCurrentSystem(c)) return false;
+      // 1. 현재 기종 필터 (showAll이 꺼져 있고 특정 기종이 선택된 경우)
+      if (selectedSystemId && !showAll) {
+        if (!isCoreMatchingSystem(c, selectedSystemId)) return false;
       }
 
       // 2. 카테고리 필터
@@ -132,14 +86,13 @@
         const matchesSystem = c.system_name.toLowerCase().includes(q);
         const matchesFile = c.file_name.toLowerCase().includes(q);
         const matchesId = c.id.toLowerCase().includes(q);
-        const matchesExt = c.supported_extensions.some(ext => ext.toLowerCase().includes(q.replace(/^\./, '')));
+        const matchesExt = c.supported_extensions.some((ext) => ext.toLowerCase().includes(q.replace(/^\./, '')));
         return matchesName || matchesSystem || matchesFile || matchesId || matchesExt;
       }
 
       return true;
     })
   );
-
 </script>
 
 <div class="core-list-panel">
@@ -196,55 +149,51 @@
       <button
         class="cat-pill"
         class:active={selectedCategory === 'all'}
-        onclick={() => (selectedCategory = 'all')}
+        onclick={() => handleCategoryClick('all')}
       >
         전체
       </button>
       <button
         class="cat-pill"
         class:active={selectedCategory === 'nintendo'}
-        onclick={() => (selectedCategory = 'nintendo')}
+        onclick={() => handleCategoryClick('nintendo')}
       >
         Nintendo
       </button>
       <button
         class="cat-pill"
         class:active={selectedCategory === 'sony'}
-        onclick={() => (selectedCategory = 'sony')}
+        onclick={() => handleCategoryClick('sony')}
       >
         Sony
       </button>
       <button
         class="cat-pill"
         class:active={selectedCategory === 'sega'}
-        onclick={() => (selectedCategory = 'sega')}
+        onclick={() => handleCategoryClick('sega')}
       >
         Sega
       </button>
       <button
         class="cat-pill"
         class:active={selectedCategory === 'arcade'}
-        onclick={() => (selectedCategory = 'arcade')}
+        onclick={() => handleCategoryClick('arcade')}
       >
         Arcade
       </button>
       <button
         class="cat-pill"
         class:active={selectedCategory === 'other'}
-        onclick={() => (selectedCategory = 'other')}
+        onclick={() => handleCategoryClick('other')}
       >
         기타
       </button>
     </div>
 
     <div class="count-summary">
-      {#if selectedSystemId && !effectiveShowAll}
+      {#if selectedSystemId && !showAll}
         <span class="highlight-summary">
           <strong>{systemName || selectedSystemId}</strong> 매칭 코어: <strong>{filteredCores.length}</strong>개
-        </span>
-      {:else if selectedSystemId && matchedCount === 0 && cores.length > 0}
-        <span class="warn-summary">
-          '{systemName || selectedSystemId}' 매칭 코어가 없어 <strong>전체 코어({filteredCores.length}개)</strong> 표시 중
         </span>
       {:else}
         <span>설치 코어: <strong>{filteredCores.length}</strong> / {cores.length}개</span>
@@ -270,6 +219,18 @@
         <button class="btn-primary reset-view-btn" onclick={onRefresh} disabled={isLoading}>
           <RefreshCw size={14} class={isLoading ? 'spin' : ''} />
           <span>기기 코어 다시 스캔</span>
+        </button>
+      </div>
+    {:else if selectedSystemId && !showAll && matchedCount === 0}
+      <div class="state-message">
+        <Cpu size={44} class="empty-icon" />
+        <h3>'{systemName || selectedSystemId}' 기종에 등록된 에뮬레이터 코어가 없습니다.</h3>
+        <p>
+          독립 실행형(Standalone) 에뮬레이터를 사용 중이거나 다른 이름으로 등록되었을 수 있습니다.<br />
+          아래 버튼을 눌러 기기 전체 설치 코어 목록을 확인해 보세요.
+        </p>
+        <button class="btn-primary reset-view-btn" onclick={() => (showAll = true)}>
+          기기 전체 코어 목록 보기 ({cores.length}개)
         </button>
       </div>
     {:else if filteredCores.length === 0}
@@ -309,7 +270,7 @@
                   <div class="active-status-pill">
                     <span>활성</span>
                   </div>
-                {:else if selectedSystemId && isCoreMatchingCurrentSystem(core)}
+                {:else if selectedSystemId && isCoreMatchingSystem(core, selectedSystemId)}
                   <button
                     class="btn-switch-core"
                     title="추후 업데이트에서 기본 코어로 바로 적용할 수 있도록 지원될 예정입니다"
