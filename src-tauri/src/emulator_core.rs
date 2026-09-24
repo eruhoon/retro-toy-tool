@@ -4,7 +4,7 @@ use crate::ssh_client::RemoteSession;
 
 pub async fn fetch_installed_cores(session: &RemoteSession) -> Result<Vec<InstalledCore>, String> {
     // 1. 광범위한 다중 OS 코어 및 info 파일 동적 탐색 쉘 스크립트 (탭 구분자 기반 안전 파싱)
-    let scan_cmd = r#"sh -c '
+    let scan_cmd = r#"
     CANDIDATE_CORE_DIRS="
         /usr/lib/libretro
         /usr/lib64/libretro
@@ -18,6 +18,13 @@ pub async fn fetch_installed_cores(session: &RemoteSession) -> Result<Vec<Instal
         /usr/lib/arm-linux-gnueabihf/libretro
         /usr/lib/aarch64-linux-gnu/libretro
         /mnt/mmc/MUOS/emulator/retroarch/cores
+        /mnt/sdcard/MUOS/emulator/retroarch/cores
+        /mnt/mmc/muos/emulator/retroarch/cores
+        /mnt/sdcard/muos/emulator/retroarch/cores
+        /opt/muos/emulator/retroarch/cores
+        /mnt/vendor/deep/retro/cores
+        /mnt/sdcard/retroarch/cores
+        /mnt/mmc/retroarch/cores
         /mnt/SDCARD/RetroArch/cores
         /mnt/SDCARD/.retroarch/cores
     "
@@ -29,6 +36,8 @@ pub async fn fetch_installed_cores(session: &RemoteSession) -> Result<Vec<Instal
         /home/ark/.config/retroarch/cores
         /opt/retropie/configs/all/retroarch/cores
         /usr/share/batocera/datainit/bios/cores
+        /mnt/mmc/MUOS/emulator/retroarch/info
+        /mnt/sdcard/MUOS/emulator/retroarch/info
     "
 
     EXISTING_INFO_DIRS=""
@@ -111,7 +120,7 @@ pub async fn fetch_installed_cores(session: &RemoteSession) -> Result<Vec<Instal
 
     # 만약 위 후보에서 하나도 못 찾았다면 심층 탐색
     if [ -z "$found_cores" ]; then
-        for deep_root in /usr/lib /storage /userdata /opt /home; do
+        for deep_root in /usr/lib /storage /userdata /opt /home /mnt; do
             [ -d "$deep_root" ] || continue
             for f in $(find "$deep_root" -maxdepth 4 -type f -name "*_libretro.so" 2>/dev/null); do
                 [ -f "$f" ] || continue
@@ -122,7 +131,7 @@ pub async fn fetch_installed_cores(session: &RemoteSession) -> Result<Vec<Instal
             done
         done
     fi
-    '"#;
+    "#;
 
     let scan_output = session.exec_command(scan_cmd).await.unwrap_or_default();
 
