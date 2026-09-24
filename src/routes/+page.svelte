@@ -593,7 +593,7 @@
               <Cpu size={15} />
               <span>
                 에뮬 코어
-                {#if selectedSystemId && matchedCoresCount > 0}
+                {#if selectedSystemId}
                   <span class="tab-count-badge">({matchedCoresCount})</span>
                 {:else if installedCores.length > 0}
                   <span class="tab-count-badge">({installedCores.length})</span>

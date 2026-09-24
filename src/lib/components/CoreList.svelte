@@ -1,18 +1,15 @@
 <script lang="ts">
   import type { InstalledCore } from '../types';
-  import { isCoreMatchingSystem, getSystemCategory } from '../utils/coreUtils';
+  import { isCoreMatchingSystem } from '../utils/coreUtils';
   import {
     Search,
     Cpu,
     RefreshCw,
     ChevronsRight,
     CheckCircle2,
-    SlidersHorizontal,
-    Info,
     Layers,
     Tag,
     FileCode,
-    Sparkles,
   } from 'lucide-svelte';
 
   let {
@@ -34,25 +31,6 @@
   }>();
 
   let searchQuery = $state('');
-  let showAll = $state(false);
-  let selectedCategory = $state<'all' | 'nintendo' | 'sony' | 'sega' | 'arcade' | 'other'>('all');
-
-  // 선택된 기종이 바뀔 때 기본적으로 해당 기종 매칭 코어 보기 모드로
-  $effect(() => {
-    if (selectedSystemId) {
-      showAll = false;
-      selectedCategory = 'all';
-    }
-  });
-
-  // 카테고리 탭 선택 시
-  function handleCategoryClick(cat: 'all' | 'nintendo' | 'sony' | 'sega' | 'arcade' | 'other') {
-    selectedCategory = cat;
-    // 특정 콘솔을 선택한 상태에서 타사 카테고리(Sony, Sega 등)를 누르면 전체 코어 보기로 유연하게 전환
-    if (cat !== 'all' && selectedSystemId) {
-      showAll = true;
-    }
-  }
 
   // 현재 기종의 기본 코어인지 확인
   function isDefaultCore(core: InstalledCore): boolean {
@@ -61,36 +39,22 @@
     return core.is_default_for.map((s) => s.toLowerCase()).includes(sysId);
   }
 
-  let matchedCount = $derived(
-    cores.filter((c: InstalledCore) => isCoreMatchingSystem(c, selectedSystemId)).length
+  // 현재 선택된 기종에 일치하는 코어 목록만 추출
+  let systemCores = $derived(
+    cores.filter((c: InstalledCore) => isCoreMatchingSystem(c, selectedSystemId))
   );
 
-  // 필터링된 코어 목록
+  // 검색어 필터링된 코어 목록
   let filteredCores = $derived(
-    cores.filter((c: InstalledCore) => {
-      // 1. 현재 기종 필터 (showAll이 꺼져 있고 특정 기종이 선택된 경우)
-      if (selectedSystemId && !showAll) {
-        if (!isCoreMatchingSystem(c, selectedSystemId)) return false;
-      }
-
-      // 2. 카테고리 필터
-      if (selectedCategory !== 'all') {
-        const cat = getSystemCategory(c);
-        if (cat !== selectedCategory) return false;
-      }
-
-      // 3. 검색어 필터
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchesName = c.display_name.toLowerCase().includes(q) || c.core_name.toLowerCase().includes(q);
-        const matchesSystem = c.system_name.toLowerCase().includes(q);
-        const matchesFile = c.file_name.toLowerCase().includes(q);
-        const matchesId = c.id.toLowerCase().includes(q);
-        const matchesExt = c.supported_extensions.some((ext) => ext.toLowerCase().includes(q.replace(/^\./, '')));
-        return matchesName || matchesSystem || matchesFile || matchesId || matchesExt;
-      }
-
-      return true;
+    systemCores.filter((c: InstalledCore) => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase().trim();
+      const matchesName = c.display_name.toLowerCase().includes(q) || c.core_name.toLowerCase().includes(q);
+      const matchesSystem = c.system_name.toLowerCase().includes(q);
+      const matchesFile = c.file_name.toLowerCase().includes(q);
+      const matchesId = c.id.toLowerCase().includes(q);
+      const matchesExt = c.supported_extensions.some((ext) => ext.toLowerCase().includes(q.replace(/^\./, '')));
+      return matchesName || matchesSystem || matchesFile || matchesId || matchesExt;
     })
   );
 </script>
@@ -114,7 +78,7 @@
         <Search size={14} class="search-icon" />
         <input
           type="text"
-          placeholder="코어 이름, 지원 기종, 확장자(예: chd, zip) 검색..."
+          placeholder="코어 이름, 지원 확장자(예: chd, zip) 검색..."
           bind:value={searchQuery}
         />
         {#if searchQuery}
@@ -124,12 +88,15 @@
     </div>
 
     <div class="toolbar-right">
-      {#if selectedSystemId}
-        <label class="toggle-show-all" title="현재 기종 코어만 볼지, 기기 전체 코어를 볼지 전환">
-          <input type="checkbox" bind:checked={showAll} />
-          <span>전체 코어 보기 ({cores.length})</span>
-        </label>
-      {/if}
+      <div class="count-summary">
+        {#if selectedSystemId}
+          <span class="highlight-summary">
+            <strong>{systemName || selectedSystemId}</strong> 코어: <strong>{filteredCores.length}</strong>개
+          </span>
+        {:else}
+          <span>설치 코어: <strong>{filteredCores.length}</strong>개</span>
+        {/if}
+      </div>
 
       <button
         class="btn-secondary refresh-btn"
@@ -140,64 +107,6 @@
         <RefreshCw size={14} class={isLoading ? 'spin' : ''} />
         <span>새로고침</span>
       </button>
-    </div>
-  </div>
-
-  <!-- 필터 서브바 -->
-  <div class="filter-subbar">
-    <div class="category-tabs">
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'all'}
-        onclick={() => handleCategoryClick('all')}
-      >
-        전체
-      </button>
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'nintendo'}
-        onclick={() => handleCategoryClick('nintendo')}
-      >
-        Nintendo
-      </button>
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'sony'}
-        onclick={() => handleCategoryClick('sony')}
-      >
-        Sony
-      </button>
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'sega'}
-        onclick={() => handleCategoryClick('sega')}
-      >
-        Sega
-      </button>
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'arcade'}
-        onclick={() => handleCategoryClick('arcade')}
-      >
-        Arcade
-      </button>
-      <button
-        class="cat-pill"
-        class:active={selectedCategory === 'other'}
-        onclick={() => handleCategoryClick('other')}
-      >
-        기타
-      </button>
-    </div>
-
-    <div class="count-summary">
-      {#if selectedSystemId && !showAll}
-        <span class="highlight-summary">
-          <strong>{systemName || selectedSystemId}</strong> 매칭 코어: <strong>{filteredCores.length}</strong>개
-        </span>
-      {:else}
-        <span>설치 코어: <strong>{filteredCores.length}</strong> / {cores.length}개</span>
-      {/if}
     </div>
   </div>
 
@@ -221,17 +130,19 @@
           <span>기기 코어 다시 스캔</span>
         </button>
       </div>
-    {:else if selectedSystemId && !showAll && matchedCount === 0}
+    {:else if !selectedSystemId}
       <div class="state-message">
         <Cpu size={44} class="empty-icon" />
-        <h3>'{systemName || selectedSystemId}' 기종에 등록된 에뮬레이터 코어가 없습니다.</h3>
+        <h3>좌측에서 플랫폼(기종)을 선택하세요.</h3>
+        <p>선택하신 플랫폼을 구동하는 데 사용할 수 있는 에뮬레이터 코어 목록이 여기에 표시됩니다.</p>
+      </div>
+    {:else if systemCores.length === 0}
+      <div class="state-message">
+        <Cpu size={44} class="empty-icon" />
+        <h3>'{systemName || selectedSystemId}' 기종에 호환되는 에뮬레이터 코어가 없습니다.</h3>
         <p>
-          독립 실행형(Standalone) 에뮬레이터를 사용 중이거나 다른 이름으로 등록되었을 수 있습니다.<br />
-          아래 버튼을 눌러 기기 전체 설치 코어 목록을 확인해 보세요.
+          해당 기종이 독립 실행형(Standalone) 에뮬레이터를 사용 중이거나 다른 이름으로 등록되었을 수 있습니다.
         </p>
-        <button class="btn-primary reset-view-btn" onclick={() => (showAll = true)}>
-          기기 전체 코어 목록 보기 ({cores.length}개)
-        </button>
       </div>
     {:else if filteredCores.length === 0}
       <div class="state-message">
@@ -244,7 +155,6 @@
           </button>
         {/if}
       </div>
-
     {:else}
       <div class="core-grid">
         {#each filteredCores as core (core.id + core.file_name)}
@@ -441,22 +351,19 @@
       align-items: center;
       gap: 12px;
 
-      .toggle-show-all {
-        display: flex;
-        align-items: center;
-        gap: 6px;
+      .count-summary {
         font-size: 12.5px;
-        color: $text-secondary;
-        cursor: pointer;
-        user-select: none;
+        color: $text-muted;
 
-        input[type='checkbox'] {
-          cursor: pointer;
-          accent-color: $accent-color;
+        strong {
+          color: $text-primary;
         }
 
-        &:hover {
-          color: $text-primary;
+        .highlight-summary {
+          color: $accent-color;
+          strong {
+            color: #fff;
+          }
         }
       }
 
@@ -467,67 +374,6 @@
         padding: 6px 12px;
         font-size: 12.5px;
         border-radius: $radius-sm;
-      }
-    }
-  }
-
-  .filter-subbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 16px;
-    background: $bg-tertiary;
-    border-bottom: 1px solid $border-color;
-    gap: 12px;
-
-    .category-tabs {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-
-      .cat-pill {
-        padding: 3px 10px;
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: $radius-full;
-        color: $text-secondary;
-        font-size: 11.5px;
-        cursor: pointer;
-        transition: all 0.15s ease;
-
-        &:hover {
-          color: $text-primary;
-          background: rgba(255, 255, 255, 0.04);
-        }
-
-        &.active {
-          background: $accent-color;
-          color: #fff;
-          font-weight: 600;
-        }
-      }
-    }
-
-    .count-summary {
-      font-size: 12px;
-      color: $text-muted;
-
-      strong {
-        color: $text-primary;
-      }
-
-      .highlight-summary {
-        color: $accent-color;
-        strong {
-          color: #fff;
-        }
-      }
-
-      .warn-summary {
-        color: #f59e0b;
-        strong {
-          color: #fbbf24;
-        }
       }
     }
   }
