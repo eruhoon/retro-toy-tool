@@ -61,7 +61,9 @@ function updatePackageJson(newVersion) {
 
 function updateTauriConf(newVersion) {
   const content = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-  content.version = newVersion;
+  // Tauri v2 strictly enforces 3-digit SemVer (X.Y.Z) in tauri.conf.json
+  const semParts = newVersion.replace(/^v/, '').split('.').slice(0, 3).join('.');
+  content.version = semParts;
   fs.writeFileSync(tauriConfPath, JSON.stringify(content, null, 2) + '\n', 'utf8');
 }
 
