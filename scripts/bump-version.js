@@ -16,7 +16,7 @@ function readPackageJson() {
 
 function parseSemVer(ver) {
   const clean = ver.replace(/^v/, '');
-  const match = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/);
+  const match = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-(.+))?$/);
   if (!match) {
     throw new Error(`Invalid SemVer format: "${ver}"`);
   }
@@ -24,7 +24,8 @@ function parseSemVer(ver) {
     major: parseInt(match[1], 10),
     minor: parseInt(match[2], 10),
     patch: parseInt(match[3], 10),
-    prerelease: match[4] || ''
+    revision: match[4] !== undefined ? parseInt(match[4], 10) : 0,
+    prerelease: match[5] || ''
   };
 }
 
@@ -32,17 +33,23 @@ function bumpVersion(type, current) {
   const sem = parseSemVer(current);
   switch (type) {
     case 'major':
-      return `${sem.major + 1}.0.0`;
+      return `${sem.major + 1}.0.0.0`;
     case 'minor':
-      return `${sem.major}.${sem.minor + 1}.0`;
+      return `${sem.major}.${sem.minor + 1}.0.0`;
     case 'patch':
-      return `${sem.major}.${sem.minor}.${sem.patch + 1}`;
+      return `${sem.major}.${sem.minor}.${sem.patch + 1}.0`;
+    case 'revision':
+      return `${sem.major}.${sem.minor}.${sem.patch}.${sem.revision + 1}`;
     default:
-      // If a specific version string was passed directly (e.g. 0.2.0)
+      // If a specific version string was passed directly (e.g. 0.2.1.0 or 0.2.1)
       if (/^\d+\.\d+\.\d+/.test(type)) {
-        return type.replace(/^v/, '');
+        const parts = type.replace(/^v/, '').split('.');
+        while (parts.length < 4) {
+          parts.push('0');
+        }
+        return parts.slice(0, 4).join('.');
       }
-      throw new Error(`Unknown bump type or version format: "${type}". Use 'major', 'minor', 'patch', or a explicit 'X.Y.Z'.`);
+      throw new Error(`Unknown bump type or version format: "${type}". Use 'major', 'minor', 'patch', 'revision', or an explicit 'X.Y.Z.R'.`);
   }
 }
 
@@ -60,10 +67,11 @@ function updateTauriConf(newVersion) {
 
 function updateCargoToml(newVersion) {
   const content = fs.readFileSync(cargoTomlPath, 'utf8');
-  // Match version = "0.1.0" under [package]
+  // Cargo.toml only supports 3-digit semver (X.Y.Z)
+  const semParts = newVersion.replace(/^v/, '').split('.').slice(0, 3).join('.');
   const updated = content.replace(
     /(\[package\][\s\S]*?version\s*=\s*")[^"]+(")/,
-    `$1${newVersion}$2`
+    `$1${semParts}$2`
   );
   fs.writeFileSync(cargoTomlPath, updated, 'utf8');
 }

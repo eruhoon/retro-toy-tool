@@ -3,6 +3,7 @@ pub mod ssh_client;
 pub mod gamelist_xml;
 pub mod rom_scanner;
 pub mod scraper;
+pub mod emulator_core;
 pub mod commands;
 pub mod updater;
 
@@ -16,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             test_connection,
+            ping_device,
             detect_storages_cmd,
             get_systems,
             get_system_games,
@@ -29,9 +31,11 @@ pub fn run() {
             download_and_upload_scraped_image_cmd,
             download_and_upload_scraped_video_cmd,
             upload_rom_files,
+            get_installed_cores_cmd,
             check_update,
             install_update
         ])
+
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -4,6 +4,7 @@ import type {
   ConnectionTestResult,
   DeviceProfile,
   GameItem,
+  InstalledCore,
   RomUploadProgressPayload,
   RomUploadResult,
   ScrapedGame,
@@ -12,6 +13,15 @@ import type {
   SystemPlatform,
 } from './types';
 
+
+
+export async function pingDevice(host: string, port: number): Promise<boolean> {
+  try {
+    return await invoke<boolean>('ping_device', { host, port });
+  } catch {
+    return false;
+  }
+}
 
 export async function testConnection(
   host: string,
@@ -249,4 +259,11 @@ export async function onRomUploadProgress(
     callback(event.payload);
   });
 }
+
+export async function getInstalledCores(device: DeviceProfile): Promise<InstalledCore[]> {
+  return await invoke<InstalledCore[]>('get_installed_cores_cmd', {
+    profile: device,
+  });
+}
+
 

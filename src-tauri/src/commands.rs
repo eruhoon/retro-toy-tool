@@ -3,16 +3,18 @@ use std::time::Instant;
 use base64::Engine;
 use tauri::Emitter;
 use crate::models::{
-    ConnectionTestResult, GameItem, RomUploadProgress, RomUploadResult, ScrapedGame,
+    ConnectionTestResult, DeviceProfile, GameItem, InstalledCore, RomUploadProgress, RomUploadResult, ScrapedGame,
     ScreenScraperAccountStatus, ScreenScraperCredentials, StorageLocation, SystemPlatform,
 };
 use crate::rom_scanner::{load_system_games, save_system_games, scan_systems};
+use crate::emulator_core::fetch_installed_cores;
 use crate::scraper::{
     clean_query, download_image, download_video, enrich_media_sizes, sanitize_scraped_game,
     search_dlsite, search_dlsite_eng, search_dlsite_kor, search_rawg, search_screenscraper,
     search_steam, search_wikipedia, test_screenscraper_account,
 };
 use crate::ssh_client::RemoteSession;
+
 
 
 
@@ -138,6 +140,19 @@ pub async fn test_connection(
         os_name,
         storages,
     })
+}
+
+#[tauri::command]
+pub async fn ping_device(host: String, port: u16) -> bool {
+    let addr = format!("{}:{}", host, port);
+    // 1200ms timeout for quick check
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(1200),
+        tokio::net::TcpStream::connect(&addr),
+    ).await {
+        Ok(Ok(_stream)) => true,
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -859,4 +874,17 @@ pub async fn upload_rom_files(
         message,
     })
 }
+
+#[tauri::command]
+pub async fn get_installed_cores_cmd(profile: DeviceProfile) -> Result<Vec<InstalledCore>, String> {
+    let session = RemoteSession::connect(
+        &profile.host,
+        profile.port,
+        &profile.username,
+        &profile.password,
+    ).await?;
+
+    fetch_installed_cores(&session).await
+}
+
 

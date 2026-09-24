@@ -162,4 +162,18 @@ export interface RomUploadResult {
   message: string;
 }
 
+export interface InstalledCore {
+  id: string;
+  file_name: string;
+  display_name: string;
+  core_name: string;
+  system_name: string;
+  supported_extensions: string[];
+  authors?: string | null;
+  license?: string | null;
+  supported_systems: string[];
+  is_default_for: string[];
+}
+
+
 

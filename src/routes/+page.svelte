@@ -3,6 +3,7 @@
   import type {
     DeviceProfile,
     GameItem,
+    InstalledCore,
     RomUploadProgressPayload,
     RomUploadResult,
     ScraperSettings,
@@ -16,6 +17,8 @@
     detectStorages,
     uploadRomFiles,
     onRomUploadProgress,
+    getInstalledCores,
+    pingDevice,
   } from '$lib/api';
   import {
     loadProfiles,
@@ -29,16 +32,44 @@
   import Header from '$lib/components/Header.svelte';
   import SystemSidebar from '$lib/components/SystemSidebar.svelte';
   import GameList from '$lib/components/GameList.svelte';
+  import CoreList from '$lib/components/CoreList.svelte';
   import MetadataEditor from '$lib/components/MetadataEditor.svelte';
   import SettingsModal from '$lib/components/SettingsModal.svelte';
   import ScraperModal from '$lib/components/ScraperModal.svelte';
   import RomUploadModal from '$lib/components/RomUploadModal.svelte';
   import UpdaterModal from '$lib/components/UpdaterModal.svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle } from 'lucide-svelte';
+  import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-svelte';
+
 
   let profiles = $state<DeviceProfile[]>([]);
   let activeDevice = $state<DeviceProfile | null>(null);
+  let devicePingStatus = $state<Record<string, 'checking' | 'online' | 'offline'>>({});
+  let isPingingDevices = $state(false);
+
+  async function pingAllDevices() {
+    if (profiles.length === 0) return;
+    isPingingDevices = true;
+    
+    // Set all to checking
+    const initial: Record<string, 'checking' | 'online' | 'offline'> = { ...devicePingStatus };
+    for (const p of profiles) {
+      initial[p.id] = 'checking';
+    }
+    devicePingStatus = initial;
+
+    // Ping concurrently
+    await Promise.all(
+      profiles.map(async (p) => {
+        const ok = await pingDevice(p.host, p.port);
+        devicePingStatus = {
+          ...devicePingStatus,
+          [p.id]: ok ? 'online' : 'offline',
+        };
+      })
+    );
+    isPingingDevices = false;
+  }
 
   let isSettingsModalOpen = $state(false);
   let settingsModalTab = $state<'device' | 'scraper'>('device');
@@ -78,6 +109,60 @@
   let uploadProgress = $state<RomUploadProgressPayload | null>(null);
   let uploadResult = $state<RomUploadResult | null>(null);
 
+  // Main View Tab State ('roms' | 'cores')
+  let mainViewTab = $state<'roms' | 'cores'>('roms');
+  let installedCores = $state<InstalledCore[]>([]);
+  let isLoadingCores = $state(false);
+
+  let matchedCoresCount = $derived.by(() => {
+    if (!selectedSystemId) return installedCores.length;
+    const sysId = selectedSystemId.toLowerCase();
+    return installedCores.filter((c) => {
+      if (c.supported_systems.map((s) => s.toLowerCase()).includes(sysId)) return true;
+      const cid = c.id.toLowerCase();
+      const sname = c.system_name.toLowerCase();
+      if (sysId === 'gba' && (cid.includes('mgba') || cid.includes('gpsp') || cid.includes('vbam'))) return true;
+      if (sysId === 'gb' && (cid.includes('gambatte') || cid.includes('mgba') || cid.includes('gearboy'))) return true;
+      if (sysId === 'gbc' && (cid.includes('gambatte') || cid.includes('mgba') || cid.includes('gearboy'))) return true;
+      if (sysId === 'snes' && (cid.includes('snes') || cid.includes('bsnes') || cid.includes('mesen-s'))) return true;
+      if (sysId === 'nes' && (cid.includes('fceumm') || cid.includes('nestopia') || cid.includes('mesen'))) return true;
+      if (sysId === 'psx' && (cid.includes('pcsx') || cid.includes('duckstation') || cid.includes('swanstation') || cid.includes('mednafen_psx'))) return true;
+      if (sysId === 'psp' && cid.includes('ppsspp')) return true;
+      if (sysId === 'n64' && (cid.includes('mupen64') || cid.includes('parallel'))) return true;
+      if (sysId === 'megadrive' || sysId === 'genesis') {
+        if (cid.includes('genesis_plus') || cid.includes('picodrive')) return true;
+      }
+      if (sysId === 'fbneo' || sysId === 'fba') {
+        if (cid.includes('fbneo') || cid.includes('fba')) return true;
+      }
+      if (sysId === 'mame' && cid.includes('mame')) return true;
+      return sname.includes(sysId);
+    }).length;
+  });
+
+  async function loadCores(force = false) {
+    if (!activeDevice) return;
+    if (!force && installedCores.length > 0) return;
+
+    isLoadingCores = true;
+    try {
+      const list = await getInstalledCores(activeDevice);
+      installedCores = list;
+    } catch (err: any) {
+      console.error('에뮬레이터 코어 로드 실패:', err);
+      showToast('에뮬레이터 코어 조회 실패: ' + (err?.message || err), 'error');
+    } finally {
+      isLoadingCores = false;
+    }
+  }
+
+  function switchMainTab(tab: 'roms' | 'cores') {
+    mainViewTab = tab;
+    if (tab === 'cores' && installedCores.length === 0) {
+      loadCores();
+    }
+  }
+
   // Auto-updater State
   let isUpdaterModalOpen = $state(false);
   let updateVersion = $state('');
@@ -86,6 +171,7 @@
   let hasUpdate = $state(false);
 
   function showToast(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+
     toastMessage = msg;
     toastType = type;
     setTimeout(() => {
@@ -161,19 +247,7 @@
       });
 
     profiles = loadProfiles();
-    const lastId = loadActiveDeviceId();
-    if (lastId) {
-      const found = profiles.find((p) => p.id === lastId);
-      if (found) {
-        connectToDevice(found);
-        return;
-      }
-    }
-    if (profiles.length === 0) {
-      openSettings('device');
-    } else {
-      connectToDevice(profiles[0]);
-    }
+    pingAllDevices();
 
     return () => {
       if (unlistenProgress) unlistenProgress();
@@ -215,8 +289,12 @@
       } else if (systems.length > 0) {
         await selectSystem(systems[0].id);
       }
+
+      // Preload installed cores in background
+      loadCores().catch(() => {});
     } catch (err: any) {
       console.error('플랫폼 로드 실패:', err);
+
       showToast('게임기 접속 실패: ' + (err?.message || err), 'error');
       systems = [];
     } finally {
@@ -401,10 +479,15 @@
   }
 
   function handleRefresh() {
-    if (activeDevice && selectedSystemId) {
-      selectSystem(selectedSystemId);
+    if (activeDevice) {
+      if (mainViewTab === 'cores') {
+        loadCores(true);
+      } else if (selectedSystemId) {
+        selectSystem(selectedSystemId);
+      }
     }
   }
+
 </script>
 
 <div class="app-layout">
@@ -430,15 +513,66 @@
       <div class="no-device-screen">
         <div class="welcome-box">
           <div class="device-icon">
-            <Cpu size={48} />
+            <Cpu size={44} />
           </div>
-          <h2>리눅스 게임기를 연결해주세요</h2>
+          <h2>게임기 연결</h2>
           <p>
-            Knulli, ROCKNIX, Batocera 등 리눅스 기반 게임기의 IP와 계정을 입력하면<br />
-            ES-DE의 ROM 디렉토리와 gamelist.xml 메타데이터를 원격으로 편리하게 관리할 수 있습니다.
+            원격으로 연결할 게임기를 선택하거나 새 게임기를 추가하세요.
           </p>
-          <button class="btn-primary start-btn" onclick={() => openSettings('device')}>
-            <Plus size={16} /> 게임기 프리셋 설정 및 연결
+
+          {#if profiles.length > 0}
+            <div class="saved-devices-container">
+              <div class="saved-devices-header">
+                <span class="saved-devices-title">등록된 기기 목록</span>
+                <button
+                  class="btn-refresh-ping"
+                  disabled={isPingingDevices}
+                  onclick={pingAllDevices}
+                  title="기기 연결 상태 다시 확인"
+                >
+                  <RefreshCw size={12} class={isPingingDevices ? 'spin' : ''} />
+                  <span>상태 새로고침</span>
+                </button>
+              </div>
+              <div class="saved-devices-list">
+                {#each profiles as p}
+                  {@const status = devicePingStatus[p.id] || 'checking'}
+                  <button
+                    class="saved-device-item"
+                    disabled={isConnectingDevice}
+                    onclick={() => connectToDevice(p)}
+                  >
+                    <div class="saved-device-meta">
+                      <div class="saved-device-name">
+                        <span
+                          class="saved-device-dot {status}"
+                          title={status === 'online' ? '기기 응답 있음 (연결 가능)' : status === 'offline' ? '기기 응답 없음 (전원 꺼짐 또는 IP 다름)' : '연결 확인 중...'}
+                        ></span>
+                        <strong>{p.name}</strong>
+                        <span class="saved-device-tag">{p.device_type}</span>
+                        {#if status === 'online'}
+                          <span class="device-status-badge online">연결 가능</span>
+                        {:else if status === 'offline'}
+                          <span class="device-status-badge offline">오프라인</span>
+                        {:else}
+                          <span class="device-status-badge checking">확인 중...</span>
+                        {/if}
+                      </div>
+                      <div class="saved-device-sub">{p.host}:{p.port} • {p.roms_path}</div>
+                    </div>
+                    <span class="connect-action-text">연결 &gt;</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <button
+            class="btn-secondary add-device-btn"
+            disabled={isConnectingDevice}
+            onclick={() => openSettings('device')}
+          >
+            <Plus size={16} /> 새 게임기 등록 및 설정
           </button>
         </div>
       </div>
@@ -457,42 +591,92 @@
           onSelectStorage={handleStorageSelect}
         />
 
-        <!-- 2. Central Game List -->
-        {#if selectedSystemId}
-          <GameList
-            {games}
-            bind:selectedGame
-            isLoading={isLoadingGames}
-            isSidebarOpen={isSidebarOpen}
-            systemName={selectedSystemName}
-            hasSelectedSystem={!!selectedSystemId}
-            onToggleSidebar={() => (isSidebarOpen = !isSidebarOpen)}
-            onSelectGame={(g) => (selectedGame = g)}
-            onUploadFiles={handleUploadFiles}
-          />
-        {:else}
-          <div class="no-system-selected">
-            <Gamepad size={40} />
-            <p>좌측에서 관리할 에뮬레이터 플랫폼을 선택하세요.</p>
-            {#if !isSidebarOpen}
-              <button class="btn-secondary open-fallback-btn" onclick={() => (isSidebarOpen = true)}>
-                콘솔 플랫폼 목록 열기 &gt;&gt;
-              </button>
+        <!-- 2. Central & Right Workspace with View Tabs -->
+        <div class="central-workspace">
+          <!-- Main Tab Switcher -->
+          <div class="main-tab-bar">
+            <button
+              class="main-tab-btn"
+              class:active={mainViewTab === 'roms'}
+              onclick={() => switchMainTab('roms')}
+            >
+              <Gamepad2 size={15} />
+              <span>게임 ROM ({selectedSystem ? selectedSystem.rom_count : games.length})</span>
+            </button>
+
+            <button
+              class="main-tab-btn"
+              class:active={mainViewTab === 'cores'}
+              onclick={() => switchMainTab('cores')}
+            >
+              <Cpu size={15} />
+              <span>
+                에뮬 코어
+                {#if selectedSystemId && matchedCoresCount > 0}
+                  <span class="tab-count-badge">({matchedCoresCount})</span>
+                {:else if installedCores.length > 0}
+                  <span class="tab-count-badge">({installedCores.length})</span>
+                {/if}
+              </span>
+            </button>
+          </div>
+
+          <!-- Tab Content Area -->
+          <div class="tab-view-container">
+            {#if mainViewTab === 'roms'}
+              <div class="roms-view-pane">
+                {#if selectedSystemId}
+                  <GameList
+                    {games}
+                    bind:selectedGame
+                    isLoading={isLoadingGames}
+                    isSidebarOpen={isSidebarOpen}
+                    systemName={selectedSystemName}
+                    hasSelectedSystem={!!selectedSystemId}
+                    onToggleSidebar={() => (isSidebarOpen = !isSidebarOpen)}
+                    onSelectGame={(g) => (selectedGame = g)}
+                    onUploadFiles={handleUploadFiles}
+                  />
+                {:else}
+                  <div class="no-system-selected">
+                    <Gamepad size={40} />
+                    <p>좌측에서 관리할 에뮬레이터 플랫폼을 선택하세요.</p>
+                    {#if !isSidebarOpen}
+                      <button class="btn-secondary open-fallback-btn" onclick={() => (isSidebarOpen = true)}>
+                        콘솔 플랫폼 목록 열기 &gt;&gt;
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
+
+                <!-- Right Metadata Inspector -->
+                <MetadataEditor
+                  bind:game={selectedGame}
+                  device={activeDevice}
+                  systemId={selectedSystemId}
+                  romsPathOverride={activeStoragePath}
+                  onGameUpdated={handleGameUpdated}
+                  onDeleteGame={handleDeleteGame}
+                  onOpenScraper={() => (isScraperModalOpen = true)}
+                />
+              </div>
+            {:else}
+              <div class="cores-view-pane">
+                <CoreList
+                  cores={installedCores}
+                  isLoading={isLoadingCores}
+                  selectedSystemId={selectedSystemId}
+                  systemName={selectedSystemName}
+                  isSidebarOpen={isSidebarOpen}
+                  onToggleSidebar={() => (isSidebarOpen = !isSidebarOpen)}
+                  onRefresh={() => loadCores(true)}
+                />
+              </div>
             {/if}
           </div>
-        {/if}
-
-        <!-- 3. Right Metadata Inspector -->
-        <MetadataEditor
-          bind:game={selectedGame}
-          device={activeDevice}
-          systemId={selectedSystemId}
-          romsPathOverride={activeStoragePath}
-          onGameUpdated={handleGameUpdated}
-          onDeleteGame={handleDeleteGame}
-          onOpenScraper={() => (isScraperModalOpen = true)}
-        />
+        </div>
       </div>
+
     {/if}
   </main>
 
@@ -616,6 +800,83 @@
     overflow: hidden;
   }
 
+  .central-workspace {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    background: $bg-primary;
+  }
+
+  .main-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 16px;
+    background: $bg-secondary;
+    border-bottom: 1px solid $border-color;
+    flex-shrink: 0;
+
+    .main-tab-btn {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 10px 18px;
+      background: transparent;
+      border: none;
+      border-radius: 0; /* 라운딩 완전 제거 */
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px; /* 바닥 경계선과 정확히 일치 */
+      color: $text-secondary;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: color 0.15s ease, border-color 0.15s ease;
+
+      &:hover {
+        color: $text-primary;
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      &.active {
+        color: $accent-color;
+        border-bottom-color: $accent-color;
+        font-weight: 600;
+      }
+
+      .tab-count-badge {
+        font-size: 11.5px;
+        opacity: 0.85;
+      }
+    }
+  }
+
+
+  .tab-view-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    height: 100%;
+  }
+
+  .roms-view-pane {
+    flex: 1;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .cores-view-pane {
+    flex: 1;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+
   .no-device-screen {
     display: flex;
     align-items: center;
@@ -658,10 +919,193 @@
         line-height: 1.6;
       }
 
-      .start-btn {
-        margin-top: 10px;
-        padding: 10px 20px;
-        font-size: 14px;
+      .saved-devices-container {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 6px;
+
+        .saved-devices-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0 4px;
+
+          .saved-devices-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: $text-muted;
+            font-weight: 600;
+          }
+
+          .btn-refresh-ping {
+            background: none;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: $text-muted;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: $radius-sm;
+            transition: all 0.15s ease;
+
+            &:hover:not(:disabled) {
+              color: $accent-color;
+              background: rgba(255, 255, 255, 0.05);
+            }
+
+            &:disabled {
+              opacity: 0.6;
+              cursor: not-allowed;
+            }
+
+            :global(.spin) {
+              animation: spin 1s linear infinite;
+            }
+          }
+        }
+
+        .saved-devices-list {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          max-height: 240px;
+          overflow-y: auto;
+        }
+
+        .saved-device-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: 100%;
+          padding: 12px 14px;
+          background: $bg-tertiary;
+          border: 1px solid $border-color;
+          border-radius: $radius-md;
+          cursor: pointer;
+          text-align: left;
+          transition: background-color 0.15s ease, border-color 0.15s ease;
+
+          &:hover {
+            border-color: $accent-color;
+            background: $bg-card;
+
+            .connect-action-text {
+              color: $accent-light;
+            }
+          }
+
+          .saved-device-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+
+            .saved-device-name {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              color: $text-primary;
+              font-size: 14px;
+
+              .saved-device-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: $radius-full;
+                background: $text-disabled;
+                flex-shrink: 0;
+                transition: background 0.2s ease, box-shadow 0.2s ease;
+
+                &.online {
+                  background: #10b981;
+                  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+                }
+
+                &.offline {
+                  background: #ef4444;
+                  opacity: 0.6;
+                }
+
+                &.checking {
+                  background: #f59e0b;
+                  animation: pulse-dot 1.2s infinite ease-in-out;
+                }
+              }
+
+              .saved-device-tag {
+                font-size: 10.5px;
+                padding: 1px 6px;
+                border-radius: $radius-sm;
+                background: rgba(255, 255, 255, 0.08);
+                color: $text-secondary;
+                text-transform: uppercase;
+                font-weight: 500;
+              }
+
+              .device-status-badge {
+                font-size: 10px;
+                padding: 1px 6px;
+                border-radius: $radius-sm;
+                font-weight: 500;
+
+                &.online {
+                  background: rgba(16, 185, 129, 0.15);
+                  color: #34d399;
+                  border: 1px solid rgba(16, 185, 129, 0.25);
+                }
+
+                &.offline {
+                  background: rgba(239, 68, 68, 0.12);
+                  color: #f87171;
+                  border: 1px solid rgba(239, 68, 68, 0.2);
+                }
+
+                &.checking {
+                  background: rgba(245, 158, 11, 0.12);
+                  color: #fbbf24;
+                  border: 1px solid rgba(245, 158, 11, 0.2);
+                }
+              }
+            }
+
+            .saved-device-sub {
+              font-size: 11.5px;
+              color: $text-muted;
+              font-family: $font-mono;
+              padding-left: 16px;
+            }
+          }
+
+          .connect-action-text {
+            font-size: 12.5px;
+            font-weight: 600;
+            color: $accent-color;
+            transition: color 0.15s ease;
+            flex-shrink: 0;
+            margin-left: 12px;
+          }
+        }
+      }
+
+      .add-device-btn {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 11px 16px;
+        font-size: 13.5px;
+        border-style: dashed;
+        border-color: $border-light;
+        margin-top: 4px;
+
+        &:hover {
+          border-color: $accent-color;
+          color: $text-primary;
+        }
       }
     }
   }
@@ -862,6 +1306,22 @@
     to {
       opacity: 1;
       transform: scale(1) translateY(0);
+    }
+  }
+  @keyframes pulse-dot {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.4;
+      transform: scale(0.85);
+    }
+  }
+
+  @keyframes spin {
+    100% {
+      transform: rotate(360deg);
     }
   }
 </style>

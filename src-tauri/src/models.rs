@@ -121,3 +121,19 @@ pub struct RomUploadResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledCore {
+    pub id: String,                  // e.g. "mgba"
+    pub file_name: String,           // e.g. "mgba_libretro.so"
+    pub display_name: String,        // e.g. "Nintendo - Game Boy Advance (mGBA)"
+    pub core_name: String,           // e.g. "mGBA"
+    pub system_name: String,         // e.g. "Game Boy Advance"
+    pub supported_extensions: Vec<String>, // e.g. ["gba", "gb", "gbc", "zip", "7z"]
+    pub authors: Option<String>,
+    pub license: Option<String>,
+    pub supported_systems: Vec<String>, // e.g. ["gba", "gb", "gbc"] from es_systems.cfg
+    pub is_default_for: Vec<String>,    // systems where this core is set as default in batocera.conf
+}
+
+
+
