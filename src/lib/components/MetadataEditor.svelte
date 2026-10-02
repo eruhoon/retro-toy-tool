@@ -18,6 +18,8 @@
     Trash2,
     Film,
     Play,
+    Save,
+    Zap,
   } from 'lucide-svelte';
 
   let {
@@ -539,6 +541,34 @@
             {/if}
           </div>
         </div>
+
+        {#if game.has_battery_save || game.has_save_state}
+          <div class="field">
+            <label>연결된 세이브 파일</label>
+            <div class="readonly-field save-details-wrap">
+              {#if game.has_battery_save && game.battery_saves && game.battery_saves.length > 0}
+                <div class="save-detail-item battery">
+                  <span class="save-type-tag"><Save size={12} /> 인게임 세이브</span>
+                  <div class="save-file-tags">
+                    {#each game.battery_saves as sFile}
+                      <span class="save-file-chip" title={sFile}>💾 {sFile}</span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              {#if game.has_save_state && game.save_states && game.save_states.length > 0}
+                <div class="save-detail-item state">
+                  <span class="save-type-tag"><Zap size={12} /> 강제 세이브 (스테이트)</span>
+                  <div class="save-file-tags">
+                    {#each game.save_states as sFile}
+                      <span class="save-file-chip" title={sFile}>⚡ {sFile}</span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
 
         {#if game.video}
           <div class="field">
@@ -1130,6 +1160,52 @@
             font-size: 10px;
             color: $accent-light;
             opacity: 0.85;
+          }
+        }
+
+        &.save-details-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          padding: 8px 10px;
+
+          .save-detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+
+            .save-type-tag {
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              font-size: 11px;
+              font-weight: 600;
+            }
+
+            &.battery .save-type-tag {
+              color: #34d399;
+            }
+
+            &.state .save-type-tag {
+              color: #fbbf24;
+            }
+
+            .save-file-tags {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 4px;
+            }
+
+            .save-file-chip {
+              font-size: 11px;
+              font-family: $font-mono;
+              background: rgba(255, 255, 255, 0.06);
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              border-radius: 4px;
+              padding: 2px 7px;
+              color: $text-primary;
+              word-break: break-all;
+            }
           }
         }
       }

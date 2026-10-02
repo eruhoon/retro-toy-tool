@@ -38,6 +38,10 @@ export interface GameItem {
   hidden: boolean;
   status: GameStatus;
   file_size: number;
+  has_battery_save?: boolean;
+  has_save_state?: boolean;
+  battery_saves?: string[];
+  save_states?: string[];
 }
 
 export interface StorageLocation {

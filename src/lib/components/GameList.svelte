@@ -14,6 +14,8 @@
     ChevronsLeft,
     Film,
     FolderUp,
+    Save,
+    Zap,
   } from 'lucide-svelte';
 
   let {
@@ -83,7 +85,7 @@
     };
   });
 
-  type FilterType = 'all' | 'unregistered' | 'missing_image' | 'favorite';
+  type FilterType = 'all' | 'unregistered' | 'missing_image' | 'has_save' | 'favorite';
   let activeFilter = $state<FilterType>('all');
   let searchQuery = $state('');
 
@@ -104,6 +106,9 @@
       }
       if (activeFilter === 'missing_image') {
         return !g.image || g.image.trim() === '';
+      }
+      if (activeFilter === 'has_save') {
+        return !!(g.has_battery_save || g.has_save_state);
       }
       if (activeFilter === 'favorite') {
         return g.favorite;
@@ -209,6 +214,14 @@
       </button>
 
       <button
+        class="tab-btn save"
+        class:active={activeFilter === 'has_save'}
+        onclick={() => (activeFilter = 'has_save')}
+      >
+        세이브 ({games.filter((g: GameItem) => g.has_battery_save || g.has_save_state).length})
+      </button>
+
+      <button
         class="tab-btn fav"
         class:active={activeFilter === 'favorite'}
         onclick={() => (activeFilter = 'favorite')}
@@ -236,6 +249,7 @@
           <div class="col col-name">제목 / 파일명</div>
           <div class="col col-ox" title="실제 ROM 파일이 기기에 존재하는지 여부">ROM</div>
           <div class="col col-ox" title="gamelist.xml에 메타데이터가 등록되어 있는지 여부">메타</div>
+          <div class="col col-saves" title="세이브 파일: 💾 인게임 세이브 / ⚡ 강제 세이브(스테이트)">세이브</div>
           <div class="col col-status">상태</div>
           <div class="col col-genre">장르</div>
           <div class="col col-year">연도</div>
@@ -293,6 +307,34 @@
                   <span class="ox-badge yes" title="gamelist.xml 메타데이터 있음">O</span>
                 {:else}
                   <span class="ox-badge no" title="메타데이터 없음 (미등록)">X</span>
+                {/if}
+              </div>
+
+              <!-- Save Files: Battery Save / Save State -->
+              <div class="col col-saves">
+                {#if game.has_battery_save || game.has_save_state}
+                  <div class="save-badges-wrap">
+                    {#if game.has_battery_save}
+                      <span
+                        class="save-badge battery"
+                        title={game.battery_saves && game.battery_saves.length > 0 ? `💾 인게임 세이브:\n${game.battery_saves.join('\n')}` : '💾 인게임 세이브'}
+                      >
+                        <Save size={10} />
+                        <span class="badge-text">세이브</span>
+                      </span>
+                    {/if}
+                    {#if game.has_save_state}
+                      <span
+                        class="save-badge state"
+                        title={game.save_states && game.save_states.length > 0 ? `⚡ 강제 세이브 (스테이트):\n${game.save_states.join('\n')}` : '⚡ 강제 세이브'}
+                      >
+                        <Zap size={10} />
+                        <span class="badge-text">스테이트</span>
+                      </span>
+                    {/if}
+                  </div>
+                {:else}
+                  <span class="save-dash" title="연결된 세이브 파일 없음">-</span>
                 {/if}
               </div>
 
@@ -553,6 +595,10 @@
           color: #fbbf24;
         }
 
+        &.save.active {
+          color: #34d399;
+        }
+
         &.fav.active {
           color: #f43f5e;
         }
@@ -753,6 +799,53 @@
             color: #f87171;
             border: 1px solid rgba(239, 68, 68, 0.4);
           }
+        }
+      }
+
+      &.col-saves {
+        width: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        .save-badges-wrap {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .save-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          padding: 2px 5px;
+          border-radius: 4px;
+          font-size: 10px;
+          font-weight: 600;
+          line-height: 1.1;
+          white-space: nowrap;
+
+          &.battery {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.35);
+          }
+
+          &.state {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+          }
+
+          .badge-text {
+            font-size: 9.5px;
+          }
+        }
+
+        .save-dash {
+          color: rgba(255, 255, 255, 0.2);
+          font-size: 13px;
+          font-weight: 600;
         }
       }
 

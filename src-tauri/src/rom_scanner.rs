@@ -143,6 +143,89 @@ fn is_ignored_rom_file(system_id: &str, name: &str) -> bool {
     false
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveType {
+    Battery,
+    State,
+}
+
+pub fn classify_save_file(filename: &str) -> Option<(SaveType, String)> {
+    let lower = filename.to_lowercase();
+
+    // 1. Save states (e.g. game.state, game.state1, game.state.auto, game.state.bak, game.state0, etc.)
+    if let Some(pos) = lower.rfind(".state") {
+        let suffix = &lower[pos + 6..];
+        if suffix.is_empty()
+            || suffix == ".auto"
+            || suffix == ".bak"
+            || suffix.chars().all(|c| c.is_ascii_digit())
+            || (suffix.starts_with('.') && suffix[1..].chars().all(|c| c.is_ascii_digit()))
+        {
+            let stem = &lower[..pos];
+            if !stem.is_empty() {
+                return Some((SaveType::State, stem.to_string()));
+            }
+        }
+    }
+
+    // 2. Battery / SRAM / in-game saves
+    const BATTERY_EXTS: &[&str] = &[
+        ".srm", ".sav", ".dsv", ".rtc", ".nvram", ".mcr", ".mpk",
+        ".eep", ".fla", ".sra", ".ldn", ".bsv", ".mem", ".mcd"
+    ];
+    for ext in BATTERY_EXTS {
+        if lower.ends_with(ext) {
+            let stem = &lower[..lower.len() - ext.len()];
+            if !stem.is_empty() {
+                return Some((SaveType::Battery, stem.to_string()));
+            }
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DetectedSaves {
+    // key: normalized stem (lowercase), value: list of save filenames
+    pub battery_saves: HashMap<String, Vec<String>>,
+    pub save_states: HashMap<String, Vec<String>>,
+}
+
+impl DetectedSaves {
+    pub fn add(&mut self, filename: &str) {
+        if let Some((save_type, stem)) = classify_save_file(filename) {
+            let clean_stem = clean_rom_name(&stem).to_lowercase();
+            match save_type {
+                SaveType::Battery => {
+                    let list = self.battery_saves.entry(stem.clone()).or_default();
+                    if !list.contains(&filename.to_string()) {
+                        list.push(filename.to_string());
+                    }
+                    if !clean_stem.is_empty() && clean_stem != stem {
+                        let list2 = self.battery_saves.entry(clean_stem).or_default();
+                        if !list2.contains(&filename.to_string()) {
+                            list2.push(filename.to_string());
+                        }
+                    }
+                }
+                SaveType::State => {
+                    let list = self.save_states.entry(stem.clone()).or_default();
+                    if !list.contains(&filename.to_string()) {
+                        list.push(filename.to_string());
+                    }
+                    if !clean_stem.is_empty() && clean_stem != stem {
+                        let list2 = self.save_states.entry(clean_stem).or_default();
+                        if !list2.contains(&filename.to_string()) {
+                            list2.push(filename.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScannedRomFile {
     pub rel_path: String, // e.g. "Celeste.sh" or "sub/Celeste.sh"
@@ -270,11 +353,12 @@ async fn collect_system_roms(
     session: &RemoteSession,
     sys_path: &str,
     system_id: &str,
-) -> (Vec<ScannedRomFile>, bool, HashMap<String, String>, HashMap<String, String>) {
+) -> (Vec<ScannedRomFile>, bool, HashMap<String, String>, HashMap<String, String>, DetectedSaves) {
     let clean_sys_path = sys_path.trim_end_matches('/');
 
     let mut detected_images: HashMap<String, String> = HashMap::new();
     let mut detected_videos: HashMap<String, String> = HashMap::new();
+    let mut detected_saves = DetectedSaves::default();
 
     // 1. Fast SSH exec: lists files and game bundles directly on console (0 packet desync, instant)
     let find_cmd = if system_id.eq_ignore_ascii_case("ports") || system_id.eq_ignore_ascii_case("port") {
@@ -289,7 +373,7 @@ async fn collect_system_roms(
         )
     } else {
         format!(
-            "sh -c 'TARGET=\"{}\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 3 -type f ! -path \"*/__pycache__/*\" 2>/dev/null; find \"$TARGET\" -maxdepth 2 -type d \\( -name \"*.scummvm\" -o -name \"*.pc\" -o -name \"*.dos\" -o -name \"*.squashfs\" \\) 2>/dev/null'",
+            "sh -c 'TARGET=\"{}\"; SYS=\"$(basename \"$TARGET\")\"; PARENT=\"$(dirname \"$TARGET\")\"; [ -f \"$TARGET/gamelist.xml\" ] && echo \"__GAMELIST_XML_FOUND__\"; find \"$TARGET\" -maxdepth 3 -type f ! -path \"*/__pycache__/*\" 2>/dev/null; find \"$TARGET\" -maxdepth 2 -type d \\( -name \"*.scummvm\" -o -name \"*.pc\" -o -name \"*.dos\" -o -name \"*.squashfs\" \\) 2>/dev/null; for s in \"$PARENT/saves/$SYS\" \"$TARGET/saves\" \"/userdata/saves/$SYS\" \"/media/SHARE/saves/$SYS\"; do [ -d \"$s\" ] && find \"$s\" -maxdepth 2 -type f 2>/dev/null; done'",
             clean_sys_path
         )
     };
@@ -305,6 +389,10 @@ async fn collect_system_roms(
                     has_gamelist = true;
                     continue;
                 }
+
+                // Check if this line is a save file (works for both in-ROM and external saves)
+                let raw_filename = line.rsplit('/').next().unwrap_or(line);
+                detected_saves.add(raw_filename);
 
                 if let Some(rel) = line.strip_prefix(clean_sys_path) {
                     let rel_path = rel.trim_start_matches('/').to_string();
@@ -349,7 +437,7 @@ async fn collect_system_roms(
                 }
             }
 
-            return (filter_companion_track_files(results), has_gamelist, detected_images, detected_videos);
+            return (filter_companion_track_files(results), has_gamelist, detected_images, detected_videos, detected_saves);
         }
     }
 
@@ -359,7 +447,7 @@ async fn collect_system_roms(
         Ok(e) => e,
         Err(err) => {
             eprintln!("[collect_system_roms] list_dir error for {}: {}", sys_path, err);
-            return (results, false, detected_images, detected_videos);
+            return (results, false, detected_images, detected_videos, detected_saves);
         }
     };
 
@@ -406,6 +494,7 @@ async fn collect_system_roms(
                         let deep_path = format!("{}/{}", sub_path, sub_item.name);
                         let deep_entries = session.list_dir(&deep_path).await.unwrap_or_default();
                         for deep_item in deep_entries {
+                            detected_saves.add(&deep_item.name);
                             if !deep_item.is_dir && !is_ignored_rom_file(system_id, &deep_item.name) {
                                 results.push(ScannedRomFile {
                                     rel_path: format!("{}/{}/{}", item.name, sub_item.name, deep_item.name),
@@ -415,15 +504,19 @@ async fn collect_system_roms(
                             }
                         }
                     }
-                } else if !is_ignored_rom_file(system_id, &sub_item.name) {
-                    results.push(ScannedRomFile {
-                        rel_path: format!("{}/{}", item.name, sub_item.name),
-                        filename: sub_item.name.clone(),
-                        size: sub_item.size,
-                    });
+                } else {
+                    detected_saves.add(&sub_item.name);
+                    if !is_ignored_rom_file(system_id, &sub_item.name) {
+                        results.push(ScannedRomFile {
+                            rel_path: format!("{}/{}", item.name, sub_item.name),
+                            filename: sub_item.name.clone(),
+                            size: sub_item.size,
+                        });
+                    }
                 }
             }
         } else {
+            detected_saves.add(&item.name);
             if !is_ignored_rom_file(system_id, &item.name) {
                 results.push(ScannedRomFile {
                     rel_path: item.name.clone(),
@@ -434,7 +527,7 @@ async fn collect_system_roms(
         }
     }
 
-    (filter_companion_track_files(results), has_gamelist, detected_images, detected_videos)
+    (filter_companion_track_files(results), has_gamelist, detected_images, detected_videos, detected_saves)
 }
 
 pub async fn scan_systems(session: &RemoteSession, roms_path: &str) -> Result<Vec<SystemPlatform>, String> {
@@ -522,7 +615,7 @@ pub async fn scan_systems(session: &RemoteSession, roms_path: &str) -> Result<Ve
         let sys_path = format!("{}/{}", clean_roms_path, system_id);
 
         // Collect rom files (including ports subdirectories) and check if gamelist.xml exists
-        let (rom_files, has_gamelist, detected_images, _detected_videos) = collect_system_roms(session, &sys_path, &system_id).await;
+        let (rom_files, has_gamelist, detected_images, _detected_videos, _detected_saves) = collect_system_roms(session, &sys_path, &system_id).await;
         let rom_count = rom_files.len();
 
         // Check gamelist.xml only if it exists in the folder
@@ -591,7 +684,7 @@ pub async fn load_system_games(
     system_id: &str,
 ) -> Result<Vec<GameItem>, String> {
     let sys_path = format!("{}/{}", roms_path.trim_end_matches('/'), system_id);
-    let (rom_files, has_gamelist, detected_images, detected_videos) = collect_system_roms(session, &sys_path, system_id).await;
+    let (rom_files, has_gamelist, detected_images, detected_videos, detected_saves) = collect_system_roms(session, &sys_path, system_id).await;
 
     // Helper to find auto-detected media (image or video) by filename or clean rom name
     let find_auto_media = |fname: &str, map: &HashMap<String, String>| -> Option<String> {
@@ -603,6 +696,59 @@ pub async fn load_system_games(
         };
         let clean = clean_rom_name(fname).to_lowercase();
         map.get(&stem).or_else(|| map.get(&clean)).cloned()
+    };
+
+    // Helper to find associated save files (battery saves & save states)
+    let get_game_saves = |filename: &str, rel_path: &str| -> (bool, bool, Vec<String>, Vec<String>) {
+        let mut b_saves = Vec::new();
+        let mut s_states = Vec::new();
+
+        // Candidate stems
+        let file_stem = if let Some(pos) = filename.rfind('.') {
+            filename[..pos].to_lowercase()
+        } else {
+            filename.to_lowercase()
+        };
+
+        let clean = clean_rom_name(filename).to_lowercase();
+        let clean_stem = if let Some(pos) = clean.rfind('.') {
+            clean[..pos].to_string()
+        } else {
+            clean
+        };
+
+        let parent_stem = if rel_path.contains('/') {
+            rel_path.split('/').next().map(|s| s.to_lowercase()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut checked_stems = vec![file_stem, clean_stem];
+        if !parent_stem.is_empty() {
+            checked_stems.push(parent_stem);
+        }
+
+        for stem in checked_stems {
+            if stem.is_empty() {
+                continue;
+            }
+            if let Some(saves) = detected_saves.battery_saves.get(&stem) {
+                b_saves.extend(saves.clone());
+            }
+            if let Some(states) = detected_saves.save_states.get(&stem) {
+                s_states.extend(states.clone());
+            }
+        }
+
+        b_saves.sort();
+        b_saves.dedup();
+        s_states.sort();
+        s_states.dedup();
+
+        let has_b = !b_saves.is_empty();
+        let has_s = !s_states.is_empty();
+
+        (has_b, has_s, b_saves, s_states)
     };
 
     // Map normalized rel_path -> ScannedRomFile
@@ -681,6 +827,9 @@ pub async fn load_system_games(
             video = find_auto_media(&filename, &detected_videos);
         }
 
+        let (has_battery_save, has_save_state, battery_saves, save_states) =
+            get_game_saves(&filename, &rel_path);
+
         games.push(GameItem {
             path: g.path,
             filename,
@@ -699,6 +848,10 @@ pub async fn load_system_games(
             hidden: g.hidden.unwrap_or(false),
             status,
             file_size,
+            has_battery_save,
+            has_save_state,
+            battery_saves,
+            save_states,
         });
     }
 
@@ -715,6 +868,9 @@ pub async fn load_system_games(
             };
             let image = find_auto_media(&file.filename, &detected_images);
             let video = find_auto_media(&file.filename, &detected_videos);
+
+            let (has_battery_save, has_save_state, battery_saves, save_states) =
+                get_game_saves(&file.filename, &file.rel_path);
 
             games.push(GameItem {
                 path: format!("./{}", file.rel_path),
@@ -734,6 +890,10 @@ pub async fn load_system_games(
                 hidden: false,
                 status: GameStatus::Unregistered,
                 file_size: file.size,
+                has_battery_save,
+                has_save_state,
+                battery_saves,
+                save_states,
             });
         }
     }

@@ -49,6 +49,14 @@ pub struct GameItem {
     pub hidden: bool,
     pub status: GameStatus,
     pub file_size: u64,
+    #[serde(default)]
+    pub has_battery_save: bool,
+    #[serde(default)]
+    pub has_save_state: bool,
+    #[serde(default)]
+    pub battery_saves: Vec<String>,
+    #[serde(default)]
+    pub save_states: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
