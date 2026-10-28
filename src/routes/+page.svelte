@@ -40,6 +40,7 @@
   import UpdaterModal from '$lib/components/UpdaterModal.svelte';
   import { isCoreMatchingSystem } from '$lib/utils/coreUtils';
   import { invoke } from '@tauri-apps/api/core';
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { Gamepad, Gamepad2, Plus, Cpu, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-svelte';
 
 
@@ -228,6 +229,14 @@
 
     profiles = loadProfiles();
     pingAllDevices();
+
+    // Ensure desktop window is visible and focused
+    try {
+      const win = getCurrentWebviewWindow();
+      win.show().catch(() => {});
+      win.unminimize().catch(() => {});
+      win.setFocus().catch(() => {});
+    } catch (_) {}
 
     return () => {
       if (unlistenProgress) unlistenProgress();

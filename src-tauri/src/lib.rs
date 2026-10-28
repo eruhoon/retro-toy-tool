@@ -10,11 +10,39 @@ pub mod updater;
 use commands::*;
 use updater::*;
 
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            let window = match app.get_webview_window("main") {
+                Some(w) => w,
+                None => {
+                    eprintln!(">>> Window 'main' not found! Creating programmatically via WebviewWindowBuilder...");
+                    WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                        .title("Toy Manager")
+                        .inner_size(1280.0, 820.0)
+                        .min_inner_size(960.0, 640.0)
+                        .center()
+                        .visible(true)
+                        .focused(true)
+                        .build()
+                        .map_err(|e| {
+                            eprintln!(">>> Failed to build window: {:?}", e);
+                            e
+                        })?
+                }
+            };
+
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            println!(">>> Toy Manager window ready and displayed!");
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             test_connection,
             ping_device,
